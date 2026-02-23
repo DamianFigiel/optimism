@@ -29,7 +29,7 @@ def load_records(f):
         if rec["type"] == "summary":
             summaries[rec["category"]] = rec
         elif rec["type"] == "tx":
-            tx_ratios[rec["category"]].append(rec["refund_ratio"])
+            tx_ratios[rec["category"]].append(rec.get("refund_ratio", 0.0))
     return summaries, tx_ratios
 
 
@@ -52,7 +52,7 @@ def plot(summaries, tx_ratios, output_path):
 
     # 1. Mean refund ratio by category
     ax = axes[0]
-    mean_ratios = [summaries[c]["mean_ratio"] for c in categories]
+    mean_ratios = [summaries[c].get("mean_ratio", 0.0) for c in categories]
     bars = ax.bar(categories, mean_ratios, color=bar_colors, edgecolor="black", linewidth=0.5)
     ax.set_title("Mean Refund Ratio by Category")
     ax.set_ylabel("Refund Ratio (OPGasRefund / GasUsed)")
