@@ -1353,11 +1353,11 @@ where
             pool,
             ctx.provider().clone(),
             evm_config,
-            OpBuilderConfig {
-                da_config: self.da_config.clone(),
-                gas_limit_config: self.gas_limit_config.clone(),
-                sdm_enabled: self.sdm_enabled,
-            },
+            OpBuilderConfig::new_with_sdm(
+                self.da_config.clone(),
+                self.gas_limit_config.clone(),
+                self.sdm_enabled,
+            ),
         )
         .with_transactions(self.best_transactions.clone())
         .set_compute_pending_block(self.compute_pending_block);

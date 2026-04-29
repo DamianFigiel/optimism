@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use alloy_primitives::{Address, B256, map::HashSet};
 use revm::{
     Inspector,
@@ -26,14 +28,14 @@ use revm::{
 //                  (EIP-2929 uses this SLOAD-named constant for cold SSTORE too)
 
 /// Refund for re-touching an account warmed earlier in the block (BALANCE, EXTCODE*, CALL, …).
-const ACCOUNT_REWARM_REFUND: u64 = 2500;
+pub(super) const ACCOUNT_REWARM_REFUND: u64 = 2500;
 /// Refund for re-touching a storage slot warmed earlier in the block via SLOAD.
-const SLOAD_REWARM_REFUND: u64 = 2000;
+pub(super) const SLOAD_REWARM_REFUND: u64 = 2000;
 /// Refund for re-touching a storage slot warmed earlier in the block via SSTORE.
 ///
 /// Higher than the SLOAD refund because EIP-2929 charges cold SSTORE the full
 /// `COLD_SLOAD_COST` surcharge too, despite the SLOAD-specific constant name.
-const SSTORE_REWARM_REFUND: u64 = 2100;
+pub(super) const SSTORE_REWARM_REFUND: u64 = 2100;
 
 /// Classification for the currently executing transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +49,8 @@ pub enum PostExecTxKind {
 }
 
 impl PostExecTxKind {
-    const fn claims_refunds(self) -> bool {
+    /// Returns true if this transaction kind may claim producer-side SDM refunds.
+    pub const fn claims_refunds(self) -> bool {
         matches!(self, Self::Normal)
     }
 }
@@ -61,33 +64,64 @@ pub struct PostExecTxContext {
     pub kind: PostExecTxKind,
 }
 
-/// Extracted result for the most recently executed transaction.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// A first account touch observed during a transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostExecAccountTouch {
+    /// Touched account address.
+    pub address: Address,
+    /// Whether this touch type is eligible for the EIP-2929 account cold/warm delta refund.
+    pub refund_eligible: bool,
+}
+
+/// A first storage-slot touch observed during a transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostExecSlotTouch {
+    /// Storage account address.
+    pub address: Address,
+    /// Storage slot.
+    pub slot: B256,
+    /// Whether the first touch was an SSTORE.
+    pub is_sstore: bool,
+}
+
+/// Generic post-exec trace facts for the most recently executed transaction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PostExecTxTrace {
+    /// All accounts touched by the transaction.
+    pub touched_accounts: HashSet<Address>,
+    /// All storage slots touched by the transaction.
+    pub touched_slots: HashSet<(Address, B256)>,
+    /// Accounts intrinsically warm at transaction start.
+    pub intrinsic_warm_accounts: HashSet<Address>,
+    /// Storage slots intrinsically warm at transaction start.
+    pub intrinsic_warm_slots: HashSet<(Address, B256)>,
+    /// Accounts called by the transaction.
+    pub called_accounts: HashSet<Address>,
+    /// First account touches, preserving refund eligibility for the first touch kind.
+    pub account_touches: Vec<PostExecAccountTouch>,
+    /// First storage-slot touches, preserving whether the first touch was SSTORE.
+    pub slot_touches: Vec<PostExecSlotTouch>,
+}
+
+/// Extracted trace for the most recently executed transaction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PostExecExecutedTx {
-    /// Total refund for the tx.
-    pub refund_total: u64,
+    /// Trace facts collected while executing the tx.
+    pub trace: PostExecTxTrace,
 }
 
 #[derive(Debug, Clone, Default)]
 struct CurrentTxState {
     kind: Option<PostExecTxKind>,
     initialized_top_level: bool,
-    refund_total: u64,
-    touched_accounts: HashSet<Address>,
-    touched_slots: HashSet<(Address, B256)>,
-    intrinsic_warm_accounts: HashSet<Address>,
-    intrinsic_warm_slots: HashSet<(Address, B256)>,
+    trace: PostExecTxTrace,
 }
 
 impl CurrentTxState {
     fn begin(&mut self, ctx: PostExecTxContext) {
         self.kind = Some(ctx.kind);
         self.initialized_top_level = false;
-        self.refund_total = 0;
-        self.touched_accounts.clear();
-        self.touched_slots.clear();
-        self.intrinsic_warm_accounts.clear();
-        self.intrinsic_warm_slots.clear();
+        self.trace = PostExecTxTrace::default();
     }
 
     const fn kind(&self) -> Option<PostExecTxKind> {
@@ -97,26 +131,18 @@ impl CurrentTxState {
     fn finish(&mut self) -> PostExecExecutedTx {
         self.kind = None;
         self.initialized_top_level = false;
-        PostExecExecutedTx { refund_total: core::mem::take(&mut self.refund_total) }
-    }
-
-    fn add_refund(&mut self, amount: u64) {
-        if self.kind.is_some_and(PostExecTxKind::claims_refunds) {
-            self.refund_total = self.refund_total.saturating_add(amount);
-        }
+        PostExecExecutedTx { trace: core::mem::take(&mut self.trace) }
     }
 }
 
-/// Lightweight inspector that computes post-exec block-warming refunds.
+/// Lightweight inspector that collects generic post-exec trace facts.
 #[derive(Debug, Clone, Default)]
-pub struct SDMWarmingInspector {
-    warmed_accounts: HashSet<Address>,
-    warmed_slots: HashSet<(Address, B256)>,
+pub struct PostExecTraceInspector {
     current_tx: CurrentTxState,
     last_tx: PostExecExecutedTx,
 }
 
-impl SDMWarmingInspector {
+impl PostExecTraceInspector {
     /// Begins tracking for the next transaction.
     pub fn begin_tx(&mut self, ctx: PostExecTxContext) {
         self.current_tx.begin(ctx);
@@ -130,7 +156,7 @@ impl SDMWarmingInspector {
     /// Finishes the current transaction and stores the extracted result.
     pub fn finish_tx(&mut self) -> PostExecExecutedTx {
         let last = self.current_tx.finish();
-        self.last_tx = last;
+        self.last_tx = last.clone();
         last
     }
 
@@ -154,6 +180,7 @@ impl SDMWarmingInspector {
         self.observe_account_touch(caller, true);
 
         if let TxKind::Call(target) = context.tx().kind() {
+            self.current_tx.trace.called_accounts.insert(target);
             self.observe_account_touch(target, true);
         }
     }
@@ -162,24 +189,25 @@ impl SDMWarmingInspector {
     where
         CTX: ContextTr<Journal: JournalExt>,
     {
-        self.current_tx.intrinsic_warm_accounts.insert(context.block().beneficiary());
+        self.current_tx.trace.intrinsic_warm_accounts.insert(context.block().beneficiary());
         self.current_tx
+            .trace
             .intrinsic_warm_accounts
             .extend(context.journal_ref().precompile_addresses().iter().copied());
 
         if let Some(access_list) = context.tx().access_list() {
             for item in access_list {
                 let address = *item.address();
-                self.current_tx.intrinsic_warm_accounts.insert(address);
+                self.current_tx.trace.intrinsic_warm_accounts.insert(address);
                 for slot in item.storage_slots() {
-                    self.current_tx.intrinsic_warm_slots.insert((address, *slot));
+                    self.current_tx.trace.intrinsic_warm_slots.insert((address, *slot));
                 }
             }
         }
 
         for authority in context.tx().authorization_list() {
             if let Some(authority) = authority.authority() {
-                self.current_tx.intrinsic_warm_accounts.insert(authority);
+                self.current_tx.trace.intrinsic_warm_accounts.insert(authority);
             }
         }
     }
@@ -189,15 +217,12 @@ impl SDMWarmingInspector {
             return;
         }
 
-        if self.current_tx.touched_accounts.insert(address) &&
-            allow_refund &&
-            !self.current_tx.intrinsic_warm_accounts.contains(&address) &&
-            self.warmed_accounts.contains(&address)
-        {
-            self.current_tx.add_refund(ACCOUNT_REWARM_REFUND);
+        if self.current_tx.trace.touched_accounts.insert(address) {
+            self.current_tx
+                .trace
+                .account_touches
+                .push(PostExecAccountTouch { address, refund_eligible: allow_refund });
         }
-
-        self.warmed_accounts.insert(address);
     }
 
     fn observe_slot_touch(&mut self, address: Address, slot: B256, is_sstore: bool) {
@@ -208,22 +233,13 @@ impl SDMWarmingInspector {
         // Storage accesses should never also claim the account refund.
         self.observe_account_touch(address, false);
 
-        if self.current_tx.touched_slots.insert((address, slot)) &&
-            !self.current_tx.intrinsic_warm_slots.contains(&(address, slot)) &&
-            self.warmed_slots.contains(&(address, slot))
-        {
-            self.current_tx.add_refund(if is_sstore {
-                SSTORE_REWARM_REFUND
-            } else {
-                SLOAD_REWARM_REFUND
-            });
+        if self.current_tx.trace.touched_slots.insert((address, slot)) {
+            self.current_tx.trace.slot_touches.push(PostExecSlotTouch { address, slot, is_sstore });
         }
-
-        self.warmed_slots.insert((address, slot));
     }
 }
 
-impl<CTX> Inspector<CTX> for SDMWarmingInspector
+impl<CTX> Inspector<CTX> for PostExecTraceInspector
 where
     CTX: ContextTr<Journal: JournalExt>,
 {
@@ -264,6 +280,9 @@ where
     ) -> Option<revm::interpreter::CallOutcome> {
         if context.journal().depth() == 0 {
             self.ensure_top_level_initialized(context);
+        }
+        if self.current_tx.kind().is_some() {
+            self.current_tx.trace.called_accounts.insert(inputs.bytecode_address);
         }
         self.observe_account_touch(inputs.bytecode_address, true);
         None
@@ -307,18 +326,18 @@ where
     }
 }
 
-/// Composite inspector that always includes the [`SDMWarmingInspector`] alongside a
+/// Composite inspector that always includes the [`PostExecTraceInspector`] alongside a
 /// caller-provided inner inspector, fanning every hook to both.
 #[derive(Debug, Clone)]
 pub struct PostExecCompositeInspector<I> {
     inner: I,
-    post_exec: SDMWarmingInspector,
+    post_exec: PostExecTraceInspector,
 }
 
 impl<I> PostExecCompositeInspector<I> {
     /// Creates a new composite inspector.
     pub fn new(inner: I) -> Self {
-        Self { inner, post_exec: SDMWarmingInspector::default() }
+        Self { inner, post_exec: PostExecTraceInspector::default() }
     }
 
     /// Returns the wrapped user inspector.
@@ -356,7 +375,7 @@ impl<CTX, INTR, I> Inspector<CTX, INTR> for PostExecCompositeInspector<I>
 where
     INTR: revm::interpreter::InterpreterTypes,
     I: Inspector<CTX, INTR>,
-    SDMWarmingInspector: Inspector<CTX, INTR>,
+    PostExecTraceInspector: Inspector<CTX, INTR>,
 {
     fn initialize_interp(&mut self, interp: &mut Interpreter<INTR>, context: &mut CTX) {
         self.inner.initialize_interp(interp, context);
@@ -393,15 +412,15 @@ where
         context: &mut CTX,
         inputs: &mut CallInputs,
     ) -> Option<revm::interpreter::CallOutcome> {
-        // Always run both inspectors: the warming inspector's first-touch observations drive
-        // block-scoped refund attribution and must not be gated on whether the user inspector
-        // short-circuits the frame. The warming inspector is expected to never synthesize an
+        // Always run both inspectors: the post-exec inspector's observations drive
+        // producer-side policy attribution and must not be gated on whether the user inspector
+        // short-circuits the frame. The post-exec inspector is expected to never synthesize an
         // outcome, so inner's return value is authoritative.
         let inner = self.inner.call(context, inputs);
         let post_exec = self.post_exec.call(context, inputs);
         debug_assert!(
             post_exec.is_none(),
-            "SDMWarmingInspector must not synthesize a call outcome",
+            "PostExecTraceInspector must not synthesize a call outcome",
         );
         inner
     }
@@ -426,7 +445,7 @@ where
         let post_exec = self.post_exec.create(context, inputs);
         debug_assert!(
             post_exec.is_none(),
-            "SDMWarmingInspector must not synthesize a create outcome",
+            "PostExecTraceInspector must not synthesize a create outcome",
         );
         inner
     }

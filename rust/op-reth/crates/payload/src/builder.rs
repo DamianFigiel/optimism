@@ -20,7 +20,9 @@ use reth_evm::{
     },
 };
 use reth_execution_types::BlockExecutionOutput;
-use reth_optimism_evm::{ConfigurePostExecEvm, PostExecExecutorExt, PostExecMode};
+use reth_optimism_evm::{
+    ConfigurePostExecEvm, PostExecExecutorExt, PostExecMode, SdmPolicySetConfig,
+};
 use reth_optimism_forks::OpHardforks;
 use reth_optimism_primitives::{L2_TO_L1_MESSAGE_PASSER_ADDRESS, OpTransaction};
 use reth_optimism_txpool::{
@@ -676,10 +678,20 @@ where
         )
     }
 
-    /// Returns whether SDM production is enabled for this payload by the explicit integration-test
-    /// override.
-    pub const fn sdm_production_enabled(&self) -> bool {
-        self.builder_config.sdm_enabled
+    /// Returns the ordered producer-side SDM policy set for this payload.
+    pub fn sdm_policy_set(&self) -> SdmPolicySetConfig {
+        if !self.builder_config.sdm_policies.is_empty() {
+            self.builder_config.sdm_policies.clone()
+        } else if self.builder_config.sdm_enabled {
+            SdmPolicySetConfig::block_warming()
+        } else {
+            SdmPolicySetConfig::empty()
+        }
+    }
+
+    /// Returns whether SDM production is enabled for this payload.
+    pub fn sdm_production_enabled(&self) -> bool {
+        !self.sdm_policy_set().is_empty()
     }
 
     /// Returns the unique id for this payload job.
@@ -714,10 +726,13 @@ where
                     self.chain_spec.as_ref(),
                 )
                 .map_err(PayloadBuilderError::other)?,
-                if self.sdm_production_enabled() {
-                    PostExecMode::Produce
-                } else {
-                    PostExecMode::Disabled
+                {
+                    let policies = self.sdm_policy_set();
+                    if policies.is_empty() {
+                        PostExecMode::Disabled
+                    } else {
+                        PostExecMode::Produce(policies)
+                    }
                 },
             )
             .map_err(PayloadBuilderError::other)

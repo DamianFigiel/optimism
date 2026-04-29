@@ -362,7 +362,8 @@ mod sdm {
         let user_txs = vec![legacy_tx(0, target), legacy_tx(1, target)];
 
         let mut producer_fixture = SDMExecutorFixture::default();
-        let mut producer = producer_fixture.executor_with_post_exec_mode(PostExecMode::Produce);
+        let mut producer =
+            producer_fixture.executor_with_post_exec_mode(PostExecMode::produce_block_warming());
         let first_user_gas = producer
             .execute_transaction(&user_txs[0])
             .expect("producer executes first user tx")

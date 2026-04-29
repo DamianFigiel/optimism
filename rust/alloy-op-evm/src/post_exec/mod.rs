@@ -1,6 +1,7 @@
 //! Post-exec execution extensions.
 
 mod inspector;
+mod policy;
 
 use alloc::vec::Vec;
 use alloy_evm::{Database, Evm, EvmEnv, EvmFactory};
@@ -12,18 +13,22 @@ use op_alloy::consensus::post_exec::SDMGasEntry;
 use revm::{Inspector, inspector::NoOpInspector};
 
 pub use inspector::{
-    PostExecCompositeInspector, PostExecExecutedTx, PostExecTxContext, PostExecTxKind,
-    SDMWarmingInspector,
+    PostExecAccountTouch, PostExecCompositeInspector, PostExecExecutedTx, PostExecSlotTouch,
+    PostExecTraceInspector, PostExecTxContext, PostExecTxKind, PostExecTxTrace,
+};
+pub use policy::{
+    BlockWarmingPolicy, ContractRefundPolicy, SdmPolicy, SdmPolicyConfig, SdmPolicyEngine,
+    SdmPolicyRuntime, SdmPolicySetConfig, SdmTxContext, SdmTxOutcome,
 };
 
 use crate::block::{OpBlockExecutor, receipt_builder::OpReceiptBuilder};
 
-/// Extension trait for EVMs that can track post-exec per-transaction warming results.
+/// Extension trait for EVMs that can track post-exec per-transaction traces.
 pub trait PostExecEvm: alloy_evm::Evm {
     /// Begin post-exec tracking for the next transaction.
     fn begin_post_exec_tx(&mut self, ctx: PostExecTxContext);
 
-    /// Take the extracted post-exec result for the most recently executed transaction.
+    /// Take the extracted post-exec trace for the most recently executed transaction.
     fn take_last_post_exec_tx_result(&mut self) -> PostExecExecutedTx;
 }
 
@@ -40,7 +45,7 @@ pub trait PostExecEvmFactoryHooks: EvmFactory {
         DB: Database,
         I: Inspector<Self::Context<DB>>;
 
-    /// Take the extracted post-exec result for the most recently executed transaction.
+    /// Take the extracted post-exec trace for the most recently executed transaction.
     fn take_last_post_exec_tx_result<DB, I>(evm: &mut Self::Evm<DB, I>) -> PostExecExecutedTx
     where
         DB: Database,

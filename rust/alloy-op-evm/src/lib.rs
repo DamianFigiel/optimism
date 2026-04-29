@@ -72,7 +72,7 @@ pub struct OpEvm<DB: Database, I, P = OpPrecompiles, Tx = OpTx> {
     >,
     inspect: bool,
     post_exec_tracking_active: bool,
-    last_tx_warming_savings: u64,
+    last_post_exec_tx: post_exec::PostExecExecutedTx,
     _tx: PhantomData<Tx>,
 }
 
@@ -142,7 +142,7 @@ impl<DB: Database, I, P, Tx> OpEvm<DB, I, P, Tx> {
             }),
             inspect,
             post_exec_tracking_active: false,
-            last_tx_warming_savings: 0,
+            last_post_exec_tx: post_exec::PostExecExecutedTx::default(),
             _tx: PhantomData,
         }
     }
@@ -157,11 +157,9 @@ impl<DB: Database, I, P, Tx> OpEvm<DB, I, P, Tx> {
         self.inner.0.inspector.note_account_touch(address);
     }
 
-    /// Take the extracted post-exec result for the most recently executed transaction.
+    /// Take the extracted post-exec trace for the most recently executed transaction.
     pub fn take_last_post_exec_tx_result(&mut self) -> post_exec::PostExecExecutedTx {
-        post_exec::PostExecExecutedTx {
-            refund_total: core::mem::take(&mut self.last_tx_warming_savings),
-        }
+        core::mem::take(&mut self.last_post_exec_tx)
     }
 }
 
@@ -249,7 +247,7 @@ where
         &mut self,
         tx: Self::Tx,
     ) -> Result<ResultAndState<Self::HaltReason>, Self::Error> {
-        self.last_tx_warming_savings = 0;
+        self.last_post_exec_tx = post_exec::PostExecExecutedTx::default();
 
         let track_post_exec = self.post_exec_tracking_active;
         let result = if self.inspect || track_post_exec {
@@ -270,7 +268,7 @@ where
             }
 
             let post_exec_result = self.inner.0.inspector.finish_post_exec_tx();
-            self.last_tx_warming_savings = post_exec_result.refund_total;
+            self.last_post_exec_tx = post_exec_result;
             self.post_exec_tracking_active = false;
         }
 
@@ -444,18 +442,15 @@ mod tests {
         );
         assert!(!evm.inspect, "factory-created EVM should start with user inspection disabled");
 
-        let mut tracked_refund = |tx_index| {
-            evm.begin_post_exec_tx(post_exec::PostExecTxContext {
-                tx_index,
-                kind: post_exec::PostExecTxKind::Normal,
-            });
-            // `transact_raw` does not commit state in this low-level test, so reuse nonce 0.
-            evm.transact_raw(legacy_op_tx(0, caller, target)).expect("tx executes");
-            evm.take_last_post_exec_tx_result().refund_total
-        };
+        evm.begin_post_exec_tx(post_exec::PostExecTxContext {
+            tx_index: 0,
+            kind: post_exec::PostExecTxKind::Normal,
+        });
+        evm.transact_raw(legacy_op_tx(0, caller, target)).expect("tx executes");
+        let trace = evm.take_last_post_exec_tx_result().trace;
 
-        assert_eq!(tracked_refund(0), 0);
-        assert!(tracked_refund(1) > 0, "second tx should observe block-warmed addresses");
+        assert!(trace.touched_accounts.contains(&caller));
+        assert!(trace.touched_accounts.contains(&target));
     }
 
     #[test]

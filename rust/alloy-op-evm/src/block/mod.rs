@@ -43,7 +43,7 @@ use revm::{
 
 use crate::post_exec::{
     PostExecEvm, PostExecEvmFactoryAdapter, PostExecEvmFactoryHooks, PostExecTxContext,
-    PostExecTxKind,
+    PostExecTxKind, PostExecTxTrace, SdmPolicyEngine, SdmPolicySetConfig, SdmTxContext,
 };
 
 mod canyon;
@@ -69,9 +69,16 @@ pub enum PostExecMode {
     #[default]
     Disabled,
     /// Produce canonical post-exec refunds locally and append them to the block later.
-    Produce,
+    Produce(SdmPolicySetConfig),
     /// Verify canonical gas accounting using an post-exec payload embedded in the block.
     Verify(PostExecPayload),
+}
+
+impl PostExecMode {
+    /// Legacy producer mode: block-level warming only.
+    pub fn produce_block_warming() -> Self {
+        Self::Produce(SdmPolicySetConfig::block_warming())
+    }
 }
 
 /// Per-block post-exec state carried by [`OpBlockExecutor`].
@@ -81,8 +88,10 @@ pub enum PostExecState {
     Disabled,
     /// Produce canonical post-exec refunds locally and append them to the block later.
     Producing {
-        /// Accumulated per-tx warming refunds for post-exec tx assembly.
+        /// Accumulated per-tx aggregate refunds for post-exec tx assembly.
         entries: Vec<SDMGasEntry>,
+        /// Ordered producer-side SDM policy engine.
+        engine: SdmPolicyEngine,
     },
     /// Verify canonical gas accounting using a post-exec payload embedded in the block.
     ///
@@ -105,7 +114,9 @@ impl PostExecState {
     fn new(mode: PostExecMode) -> Self {
         match mode {
             PostExecMode::Disabled => Self::Disabled,
-            PostExecMode::Produce => Self::Producing { entries: Vec::new() },
+            PostExecMode::Produce(policies) => {
+                Self::Producing { entries: Vec::new(), engine: SdmPolicyEngine::new(policies) }
+            }
             PostExecMode::Verify(payload) => {
                 let mut remaining = BTreeMap::new();
                 let mut invalid_reason = None;
@@ -140,6 +151,28 @@ impl PostExecState {
         matches!(self, Self::Verifying { .. })
     }
 
+    fn production_needs_trace(&self) -> bool {
+        match self {
+            Self::Producing { engine, .. } => engine.needs_trace(),
+            _ => false,
+        }
+    }
+
+    fn produced_refund_for_tx<H>(
+        &mut self,
+        tx: &SdmTxContext,
+        trace: &PostExecTxTrace,
+        evm_gas_used: u64,
+        result: &ExecutionResult<H>,
+    ) -> Option<u64> {
+        match self {
+            Self::Producing { engine, .. } => {
+                Some(engine.refund_for_tx(tx, trace, evm_gas_used, result))
+            }
+            _ => None,
+        }
+    }
+
     const fn invalid_reason(&self) -> Option<&str> {
         match self {
             Self::Verifying { invalid_reason: Some(reason), .. } => Some(reason.as_str()),
@@ -161,14 +194,14 @@ impl PostExecState {
 
     const fn produced_entries_mut(&mut self) -> Option<&mut Vec<SDMGasEntry>> {
         match self {
-            Self::Producing { entries } => Some(entries),
+            Self::Producing { entries, .. } => Some(entries),
             _ => None,
         }
     }
 
     fn take_entries(&mut self) -> Vec<SDMGasEntry> {
         match self {
-            Self::Producing { entries } => core::mem::take(entries),
+            Self::Producing { entries, .. } => core::mem::take(entries),
             _ => Vec::new(),
         }
     }
@@ -786,11 +819,11 @@ where
             0
         };
 
-        if self.post_exec.is_producing() {
-            self.evm.begin_post_exec_tx(PostExecTxContext {
-                tx_index,
-                kind: if is_deposit { PostExecTxKind::Deposit } else { PostExecTxKind::Normal },
-            });
+        let post_exec_tx_kind =
+            if is_deposit { PostExecTxKind::Deposit } else { PostExecTxKind::Normal };
+        let production_needs_trace = self.post_exec.production_needs_trace();
+        if production_needs_trace {
+            self.evm.begin_post_exec_tx(PostExecTxContext { tx_index, kind: post_exec_tx_kind });
         }
 
         // Execute transaction and return the result
@@ -801,8 +834,17 @@ where
 
         let evm_gas_used = result.result.tx_gas_used();
         let post_exec_refund = if self.post_exec.is_producing() {
-            let refund = self.evm.take_last_post_exec_tx_result().refund_total;
-            // The inspector's accumulated refund must never exceed the tx's evm_gas_used. If
+            let trace = if production_needs_trace {
+                self.evm.take_last_post_exec_tx_result().trace
+            } else {
+                PostExecTxTrace::default()
+            };
+            let tx_ctx = SdmTxContext { tx_index, kind: post_exec_tx_kind, sender: *tx.signer() };
+            let refund = self
+                .post_exec
+                .produced_refund_for_tx(&tx_ctx, &trace, evm_gas_used, &result.result)
+                .unwrap_or_default();
+            // The policy engine's accumulated refund must never exceed the tx's evm_gas_used. If
             // it does, we'd emit an `SDMGasEntry` that any honest verifier would reject
             // at pre-execution ("payload refund exceeds evm_gas_used"), so the sequencer
             // would ship a block it can't verify itself. Fail here with a loud error

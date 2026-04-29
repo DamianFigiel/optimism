@@ -2,6 +2,8 @@
 
 use std::sync::{Arc, atomic::AtomicU64};
 
+use reth_optimism_evm::SdmPolicySetConfig;
+
 /// Settings for the OP builder.
 #[derive(Debug, Clone, Default)]
 pub struct OpBuilderConfig {
@@ -9,28 +11,40 @@ pub struct OpBuilderConfig {
     pub da_config: OpDAConfig,
     /// Gas limit configuration for the OP builder.
     pub gas_limit_config: OpGasLimitConfig,
-    /// Whether post-exec transactions should be injected for produced payloads.
+    /// Whether post-exec transactions should be injected for produced payloads using the legacy
+    /// block-warming policy.
     ///
-    /// This is a temporary integration-test override; SDM has no scheduled Jovian/Karst
-    /// activation.
+    /// This is compatibility sugar for integration-test setups.
     pub sdm_enabled: bool,
+    /// Ordered producer-side SDM policies for payload building.
+    pub sdm_policies: SdmPolicySetConfig,
 }
 
 impl OpBuilderConfig {
     /// Creates a new OP builder configuration with the given data availability configuration.
     pub const fn new(da_config: OpDAConfig, gas_limit_config: OpGasLimitConfig) -> Self {
-        Self { da_config, gas_limit_config, sdm_enabled: false }
+        Self {
+            da_config,
+            gas_limit_config,
+            sdm_enabled: false,
+            sdm_policies: SdmPolicySetConfig::empty(),
+        }
     }
 
     /// Creates a new OP builder configuration with SDM (Sequencer-Defined Metering) enabled per
     /// the given flag.
     #[must_use]
-    pub const fn new_with_sdm(
+    pub fn new_with_sdm(
         da_config: OpDAConfig,
         gas_limit_config: OpGasLimitConfig,
         sdm_enabled: bool,
     ) -> Self {
-        Self { da_config, gas_limit_config, sdm_enabled }
+        let sdm_policies = if sdm_enabled {
+            SdmPolicySetConfig::block_warming()
+        } else {
+            SdmPolicySetConfig::empty()
+        };
+        Self { da_config, gas_limit_config, sdm_enabled, sdm_policies }
     }
 
     /// Returns the Data Availability configuration for the OP builder, if it has configured
