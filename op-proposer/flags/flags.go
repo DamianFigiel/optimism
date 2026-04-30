@@ -32,10 +32,11 @@ var (
 		Usage:   "HTTP provider URL for the rollup node. A comma-separated list enables the active rollup provider.",
 		EnvVars: prefixEnvVars("ROLLUP_RPC"),
 	}
-	SupervisorRpcsFlag = &cli.StringSliceFlag{
-		Name:    "supervisor-rpcs",
-		Usage:   "HTTP provider URLs for the supervisor nodes. Multiple URLs can be provided to automatically fail over.",
-		EnvVars: prefixEnvVars("SUPERVISOR_RPCS"),
+	SuperNodeRpcsFlag = &cli.StringSliceFlag{
+		Name:    "supernode-rpcs",
+		Aliases: []string{"supervisor-rpcs"},
+		Usage:   "HTTP provider URLs for the supernode (formerly supervisor) nodes. Multiple URLs can be provided to automatically fail over.",
+		EnvVars: append(prefixEnvVars("SUPERNODE_RPCS"), prefixEnvVars("SUPERVISOR_RPCS")...),
 	}
 
 	// Optional flags
@@ -89,7 +90,7 @@ var requiredFlags = []cli.Flag{
 
 var optionalFlags = []cli.Flag{
 	RollupRpcFlag,
-	SupervisorRpcsFlag,
+	SuperNodeRpcsFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
 	L2OutputHDPathFlag,
