@@ -40,6 +40,7 @@ func TestOptionKindsFromCompositeOptions(t *testing.T) {
 		require.Zero(t, WithGlobalSyncTesterELOption(nil).optionKinds())
 		require.Zero(t, WithProposerOption(nil).optionKinds())
 		require.Zero(t, WithOPRBuilderOption(nil).optionKinds())
+		require.Zero(t, WithOpRethOption(nil).optionKinds())
 		require.Zero(t, WithPreGenesisSuperGame().optionKinds())
 		require.Zero(t, AfterBuild(nil).optionKinds())
 	})

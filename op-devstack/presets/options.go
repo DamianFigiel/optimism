@@ -212,6 +212,22 @@ func WithOPRBuilderOption(opt sysgo.OPRBuilderNodeOption) Option {
 	}
 }
 
+func WithOpRethOption(opt sysgo.OpRethOption) Option {
+	var kinds optionKinds
+	if opt != nil {
+		kinds = optionKindOpReth
+	}
+	return option{
+		kinds: kinds,
+		applyFn: func(cfg *sysgo.PresetConfig) {
+			if opt == nil {
+				return
+			}
+			cfg.OpRethOptions = append(cfg.OpRethOptions, opt)
+		},
+	}
+}
+
 func WithGameTypeAdded(gameType gameTypes.GameType) Option {
 	return option{
 		kinds: optionKindAddedGameType,

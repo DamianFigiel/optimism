@@ -127,18 +127,18 @@ impl SingleBatch {
             return BatchValidity::Drop(BatchDropReason::SequencerDriftOverflow);
         };
 
-        let no_txs = self.transactions.is_empty();
-        if self.timestamp > max && !no_txs {
-            // If the sequencer is ignoring the time drift rule, then drop the batch and force an
-            // empty batch instead, as the sequencer is not allowed to include anything
-            // past this point without moving to the next epoch.
-            return BatchValidity::Drop(BatchDropReason::SequencerDriftExceeded);
-        }
-        if self.timestamp > max && no_txs {
-            // If the sequencer is co-operating by producing an empty batch,
-            // allow the batch if it was the right thing to do to maintain the L2 time >= L1 time
-            // invariant. Only check batches that do not advance the epoch, to ensure
-            // epoch advancement regardless of time drift is allowed.
+        if self.timestamp > max {
+            if !self.transactions.is_empty() {
+                // If the sequencer is ignoring the time drift rule, then drop the batch and force
+                // an empty batch instead, as the sequencer is not allowed to include anything past
+                // this point without moving to the next epoch.
+                return BatchValidity::Drop(BatchDropReason::SequencerDriftExceeded);
+            }
+
+            // If the sequencer is co-operating by producing an empty batch, allow the batch if it
+            // was the right thing to do to maintain the L2 time >= L1 time invariant. Only check
+            // batches that do not advance the epoch, to ensure epoch advancement regardless of time
+            // drift is allowed.
             if epoch.number == batch_origin.number {
                 if l1_blocks.len() < 2 {
                     return BatchValidity::Undecided;
@@ -169,17 +169,17 @@ impl SingleBatch {
 
         // We can do this check earlier, but it's intensive so we do it last for the sad-path.
         for tx in &self.transactions {
-            if tx.is_empty() {
+            let Some(tx_type) = tx.as_ref().first().copied() else {
                 return BatchValidity::Drop(BatchDropReason::EmptyTransaction);
-            }
-            if tx.as_ref().first() == Some(&(OpTxType::Deposit as u8)) {
+            };
+            if tx_type == OpTxType::Deposit as u8 {
                 return BatchValidity::Drop(BatchDropReason::DepositTransaction);
             }
-            // If isthmus is not active yet and the transaction is a 7702, drop the batch.
-            if !cfg.is_isthmus_active(self.timestamp) &&
-                tx.as_ref().first() == Some(&(OpTxType::Eip7702 as u8))
-            {
+            if !cfg.is_isthmus_active(self.timestamp) && tx_type == OpTxType::Eip7702 as u8 {
                 return BatchValidity::Drop(BatchDropReason::Eip7702PreIsthmus);
+            }
+            if !cfg.is_sdm_active(self.timestamp) && tx_type == OpTxType::PostExec as u8 {
+                return BatchValidity::Drop(BatchDropReason::PostExecPreSDM);
             }
         }
 

@@ -21,8 +21,11 @@ use kona_proof::HintType;
 use kona_providers_alloy::{OnlineBeaconClient, OnlineBlobProvider};
 use kona_std_fpvm::{FileChannel, FileDescriptor};
 use op_alloy_network::Optimism;
-use serde::Serialize;
-use std::{path::PathBuf, sync::Arc};
+use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::task::{self, JoinHandle};
 
 /// The host binary CLI application arguments.
@@ -233,23 +236,13 @@ impl SingleChainHost {
     pub fn read_rollup_config(&self) -> Result<RollupConfig, SingleChainHostError> {
         let path =
             self.rollup_config_path.as_ref().ok_or_else(|| SingleChainHostError::NoRollupConfig)?;
-
-        // Read the serialized config from the file system.
-        let ser_config = std::fs::read_to_string(path)?;
-
-        // Deserialize the config and return it.
-        serde_json::from_str(&ser_config).map_err(SingleChainHostError::ParseError)
+        read_json_file(path)
     }
 
     /// Reads the [`L1ChainConfig`] from the file system and returns the deserialized configuration.
     pub fn read_l1_config(&self) -> Result<L1ChainConfig, SingleChainHostError> {
         let path = self.l1_config_path.as_ref().ok_or_else(|| SingleChainHostError::NoL1Config)?;
-
-        // Read the serialized config from the file system.
-        let ser_config = std::fs::read_to_string(path)?;
-
-        // Deserialize the config and return it.
-        serde_json::from_str(&ser_config).map_err(SingleChainHostError::ParseError)
+        read_json_file(path)
     }
 
     /// Creates the key-value store for the host backend.
@@ -284,6 +277,11 @@ impl SingleChainHost {
 
         Ok(SingleChainProviders { l1: l1_provider, blobs: blob_provider, l2: l2_provider })
     }
+}
+
+fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T, SingleChainHostError> {
+    let data = std::fs::read_to_string(path)?;
+    serde_json::from_str(&data).map_err(SingleChainHostError::ParseError)
 }
 
 impl OnlineHostBackendCfg for SingleChainHost {

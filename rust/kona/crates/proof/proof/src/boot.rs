@@ -6,7 +6,7 @@ use alloy_primitives::{B256, U256};
 use kona_genesis::{L1ChainConfig, RollupConfig};
 use kona_preimage::{PreimageKey, PreimageOracleClient};
 use kona_registry::{L1_CONFIGS, ROLLUP_CONFIGS};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// The local key identifier for the L1 head hash.
 ///
@@ -186,42 +186,11 @@ impl BootInfo {
     where
         O: PreimageOracleClient + Send,
     {
-        let mut l1_head: B256 = B256::ZERO;
-        oracle
-            .get_exact(PreimageKey::new_local(L1_HEAD_KEY.to()), l1_head.as_mut())
-            .await
-            .map_err(OracleProviderError::Preimage)?;
-
-        let mut l2_output_root: B256 = B256::ZERO;
-        oracle
-            .get_exact(PreimageKey::new_local(L2_OUTPUT_ROOT_KEY.to()), l2_output_root.as_mut())
-            .await
-            .map_err(OracleProviderError::Preimage)?;
-
-        let mut l2_claim: B256 = B256::ZERO;
-        oracle
-            .get_exact(PreimageKey::new_local(L2_CLAIM_KEY.to()), l2_claim.as_mut())
-            .await
-            .map_err(OracleProviderError::Preimage)?;
-
-        let l2_claim_block = u64::from_be_bytes(
-            oracle
-                .get(PreimageKey::new_local(L2_CLAIM_BLOCK_NUMBER_KEY.to()))
-                .await
-                .map_err(OracleProviderError::Preimage)?
-                .as_slice()
-                .try_into()
-                .map_err(OracleProviderError::SliceConversion)?,
-        );
-        let chain_id = u64::from_be_bytes(
-            oracle
-                .get(PreimageKey::new_local(L2_CHAIN_ID_KEY.to()))
-                .await
-                .map_err(OracleProviderError::Preimage)?
-                .as_slice()
-                .try_into()
-                .map_err(OracleProviderError::SliceConversion)?,
-        );
+        let l1_head = read_local_b256(oracle, L1_HEAD_KEY).await?;
+        let l2_output_root = read_local_b256(oracle, L2_OUTPUT_ROOT_KEY).await?;
+        let l2_claim = read_local_b256(oracle, L2_CLAIM_KEY).await?;
+        let l2_claim_block = read_local_u64(oracle, L2_CLAIM_BLOCK_NUMBER_KEY).await?;
+        let chain_id = read_local_u64(oracle, L2_CHAIN_ID_KEY).await?;
 
         // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
         // fall back to loading the config from the preimage oracle.
@@ -233,15 +202,11 @@ impl BootInfo {
                 "No rollup config found for chain ID {}, falling back to preimage oracle. This is insecure in production without additional validation!",
                 chain_id
             );
-            let ser_cfg = oracle
-                .get(PreimageKey::new_local(L2_ROLLUP_CONFIG_KEY.to()))
-                .await
-                .map_err(OracleProviderError::Preimage)?;
-            serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
+            read_local_json(oracle, L2_ROLLUP_CONFIG_KEY).await?
         };
 
-        // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
-        // fall back to loading the config from the preimage oracle.
+        // Attempt to load the L1 config from the rollup config's L1 chain ID. If there is no
+        // config for the chain, fall back to loading the config from the preimage oracle.
         let l1_config = if let Some(config) = L1_CONFIGS.get(&rollup_config.l1_chain_id) {
             config.clone()
         } else {
@@ -250,12 +215,7 @@ impl BootInfo {
                 "No l1 config found for chain ID {}, falling back to preimage oracle. This is insecure in production without additional validation!",
                 rollup_config.l1_chain_id
             );
-            let ser_cfg = oracle
-                .get(PreimageKey::new_local(L1_CONFIG_KEY.to()))
-                .await
-                .map_err(OracleProviderError::Preimage)?;
-
-            serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
+            read_local_json(oracle, L1_CONFIG_KEY).await?
         };
 
         debug!(
@@ -276,4 +236,41 @@ impl BootInfo {
             l1_config,
         })
     }
+}
+
+async fn read_local_b256<O>(oracle: &O, key: U256) -> Result<B256, OracleProviderError>
+where
+    O: PreimageOracleClient + Send,
+{
+    let mut value = B256::ZERO;
+    oracle
+        .get_exact(PreimageKey::new_local(key.to()), value.as_mut())
+        .await
+        .map_err(OracleProviderError::Preimage)?;
+    Ok(value)
+}
+
+async fn read_local_u64<O>(oracle: &O, key: U256) -> Result<u64, OracleProviderError>
+where
+    O: PreimageOracleClient + Send,
+{
+    let bytes = oracle
+        .get(PreimageKey::new_local(key.to()))
+        .await
+        .map_err(OracleProviderError::Preimage)?;
+    Ok(u64::from_be_bytes(
+        bytes.as_slice().try_into().map_err(OracleProviderError::SliceConversion)?,
+    ))
+}
+
+async fn read_local_json<O, T>(oracle: &O, key: U256) -> Result<T, OracleProviderError>
+where
+    O: PreimageOracleClient + Send,
+    T: DeserializeOwned,
+{
+    let bytes = oracle
+        .get(PreimageKey::new_local(key.to()))
+        .await
+        .map_err(OracleProviderError::Preimage)?;
+    serde_json::from_slice(&bytes).map_err(OracleProviderError::Serde)
 }

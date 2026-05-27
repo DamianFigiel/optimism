@@ -15,6 +15,7 @@ const (
 	optionKindBatcher
 	optionKindProposer
 	optionKindOPRBuilder
+	optionKindOpReth
 	optionKindGlobalL2CL
 	optionKindGlobalSyncTesterEL
 	optionKindL1EL
@@ -36,6 +37,7 @@ const allOptionKinds = optionKindDeployer |
 	optionKindBatcher |
 	optionKindProposer |
 	optionKindOPRBuilder |
+	optionKindOpReth |
 	optionKindGlobalL2CL |
 	optionKindGlobalSyncTesterEL |
 	optionKindL1EL |
@@ -60,6 +62,7 @@ var optionKindLabels = []struct {
 	{kind: optionKindBatcher, label: "batcher options"},
 	{kind: optionKindProposer, label: "proposer options"},
 	{kind: optionKindOPRBuilder, label: "builder options"},
+	{kind: optionKindOpReth, label: "op-reth options"},
 	{kind: optionKindGlobalL2CL, label: "L2 CL options"},
 	{kind: optionKindGlobalSyncTesterEL, label: "sync tester EL options"},
 	{kind: optionKindL1EL, label: "L1 EL options"},
@@ -137,6 +140,7 @@ const simpleWithSyncTesterPresetSupportedOptionKinds = minimalPresetSupportedOpt
 
 const supernodeProofsPresetSupportedOptionKinds = optionKindDeployer |
 	optionKindBatcher |
+	optionKindOpReth |
 	optionKindL1EL |
 	optionKindTimeTravel |
 	optionKindMessageExpiryWindow |

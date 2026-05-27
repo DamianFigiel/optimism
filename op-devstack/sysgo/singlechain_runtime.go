@@ -77,7 +77,7 @@ func startDefaultSingleChainPrimary(
 	jwtSecret [32]byte,
 	cfg PresetConfig,
 ) singleChainPrimaryRuntime {
-	l2EL := startSequencerEL(t, world.L2Network, jwtPath, jwtSecret, NewELNodeIdentity(0))
+	l2EL := startSequencerEL(t, world.L2Network, jwtPath, jwtSecret, NewELNodeIdentity(0), cfg.OpRethOptions...)
 	l2CL := startSequencerCL(t, keys, world.L1Network, world.L2Network, l1EL, l1CL, l2EL, jwtSecret, cfg.GlobalL2CLOptions)
 	return singleChainPrimaryRuntime{
 		EL: l2EL,

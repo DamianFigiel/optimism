@@ -15,7 +15,7 @@ type KonaExecutor struct {
 var _ OracleServerExecutor = (*KonaExecutor)(nil)
 
 func NewKonaExecutor() *KonaExecutor {
-	return &KonaExecutor{nativeMode: false}
+	return &KonaExecutor{}
 }
 
 func NewNativeKonaExecutor() *KonaExecutor {
@@ -42,8 +42,7 @@ func (s *KonaExecutor) OracleCommand(cfg Config, dataDir string, inputs utils.Lo
 	if s.nativeMode {
 		args = append(args, "--native")
 	} else {
-		args = append(args, "--server")
-		args = append(args, "--data-dir", dataDir)
+		args = append(args, "--server", "--data-dir", dataDir)
 	}
 
 	if len(cfg.RollupConfigPaths) > 0 {
