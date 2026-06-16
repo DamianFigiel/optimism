@@ -781,6 +781,137 @@ func TestSDMMixedWorkloadSmoke(gt *testing.T) {
 	}
 }
 
+// TestSDMDepositOnlyDerivationOnSequencingWindowExpiry exercises the "sequencer down, chain
+// auto-derives" path under SDM.
+//
+// When the batcher stops submitting and the sequencing window expires, op-node force-derives
+// deposit-only blocks straight from L1 (deriveNextEmptyBatch). The property under test: those
+// force-derived blocks carry only deposit transactions and must NOT contain a PostExec (0x7D) tx —
+// a deposit-only block has no user transactions, hence no SDM gas-refund entries, hence no 0x7D —
+// and an SDM-active op-reth verifier must accept them all the same. Producing a 0x7D for such a
+// block, or rejecting a block that lacks one, would stall safe progress.
+//
+// The test then confirms SDM resumes (a fresh 0x7D block derives safe) once the chain recovers,
+// guarding the force-build path that previously mishandled embedded 0x7D txs on sequencer-window
+// expiry.
+func TestSDMDepositOnlyDerivationOnSequencingWindowExpiry(gt *testing.T) {
+	t := devtest.SerialT(gt)
+	sys := newSDMRethSystemWithSequencingWindow(t, 10)
+	verifyOpReth(t, sys.L2EL)
+	verifyOpReth(t, sys.L2ELVerifier)
+	require := t.Require()
+
+	// 1. Baseline: with the batcher running, produce a real PostExec block and lock it in as safe on
+	//    both the sequencer and the verifier. This is the "before downtime" state.
+	sys.L2Batcher.Start()
+	block, _, postExecBlockNum := mustFindRepeatedSlotBlock(t, sys, 2, 3)
+	postExecTx, _ := findPostExecTransaction(block)
+	require.NotNil(postExecTx, "baseline: SDM sequencer must emit a 0x7D before downtime")
+	postExecRef := sys.L2EL.BlockRefByNumber(postExecBlockNum)
+	require.Equal(block.Hash, postExecRef.Hash, "selected post-exec block must be canonical")
+
+	dsl.CheckAll(t,
+		sys.L2CLVerifier.ReachedRefFn(safety.CrossSafe, postExecRef.ID(), 120),
+		sys.L2ELVerifier.ReachedFn(eth.Safe, postExecBlockNum, 120),
+	)
+	require.Equal(postExecRef.Hash, sys.L2ELVerifier.BlockRefByNumber(postExecBlockNum).Hash,
+		"verifier must derive the same post-exec block before downtime")
+
+	// 2. "Sequencer down": stop the batcher so unsafe blocks stop reaching L1. A batch submitted just
+	//    before the stop can still land a block or two later, so wait until the local-safe head
+	//    quiesces before recording it. Past that point no batch was submitted, so any further safe
+	//    block can only come from force-derivation. The quiesce settles within 1-2 L1 blocks, well
+	//    inside the sequencing window, so this never races the expiry it is measuring against.
+	sys.L2Batcher.Stop()
+	var lastLocalSafe eth.L2BlockRef
+	for range 4 {
+		next := sys.L1Network.WaitForBlock()
+		sys.L2CL.AwaitMinL1Processed(next.Number)
+		cur := sys.L2CL.SyncStatus().LocalSafeL2
+		if cur.Hash == lastLocalSafe.Hash {
+			break // safe head stopped advancing — all in-flight batches consumed
+		}
+		lastLocalSafe = cur
+	}
+	seqWindow := sys.L2Network.Escape().RollupConfig().SeqWindowSize
+	expiryOrigin := lastLocalSafe.L1Origin.Number + seqWindow
+	require.Greater(lastLocalSafe.Number, postExecBlockNum,
+		"last safe block must be at or past the post-exec block before downtime")
+	t.Logger().Info("Batcher stopped; local-safe quiesced, awaiting sequencing-window expiry",
+		"last_local_safe", lastLocalSafe.ID(), "l1_origin", lastLocalSafe.L1Origin.Number,
+		"seq_window", seqWindow, "expiry_origin", expiryOrigin)
+
+	// 3. Insert a tx that lands in an unsafe block. Expiry will reorg it out and replace it with a
+	//    force-derived deposit-only block — concrete proof that real activity, not just idle empties,
+	//    was replaced (mirrors TestSequencingWindowExpiry).
+	alice := sys.FunderL2.NewFundedEOA(eth.OneEther)
+	doomed := alice.Transfer(common.HexToAddress("0x000000000000000000000000000000000000dEaD"), eth.GWei(42))
+	doomedReceipt, err := doomed.Included.Eval(t.Ctx())
+	require.NoError(err, "doomed tx must be included in an unsafe block before expiry")
+	old := eth.L2BlockRef{Hash: doomedReceipt.BlockHash, Number: bigs.Uint64Strict(doomedReceipt.BlockNumber)}
+	require.Greater(old.Number, lastLocalSafe.Number, "doomed block must be an unsafe block past the safe head")
+
+	// 4. Recovery mode: stop the sequencer building an ever-growing incompatible unsafe chain (and
+	//    re-including the doomed tx) while we wait for the window to expire.
+	require.NoError(sys.L2CL.Escape().RollupAPI().SetRecoverMode(t.Ctx(), true))
+
+	// 5. Wait for both nodes to force-derive a safe chain past the expiry origin. With the batcher
+	//    stopped, the only way the safe head advances is by force-deriving deposit-only blocks from L1.
+	sys.L2EL.WaitL1OriginReached(eth.Safe, expiryOrigin+1, 300)
+	sys.L2ELVerifier.WaitL1OriginReached(eth.Safe, expiryOrigin+1, 300)
+
+	// 6. The actual assertion: every block force-derived during downtime (L1 origin within the expired
+	//    window) is deposit-only, carries no 0x7D, and the sequencer and verifier agree on it
+	//    byte-for-byte. Bound the range by L1 origin rather than the live safe head, which keeps
+	//    advancing — and only blocks with origin <= expiryOrigin are guaranteed force-derived.
+	require.NotEqual(old.Hash, sys.L2ELVerifier.BlockRefByNumber(old.Number).Hash,
+		"the unsafe block carrying the doomed tx must have been reorged out and replaced")
+	checked := 0
+	for n := lastLocalSafe.Number + 1; ; n++ {
+		ref := sys.L2ELVerifier.BlockRefByNumber(n)
+		if ref.L1Origin.Number > expiryOrigin {
+			break // past the force-derived window — later blocks may carry batched activity once recovered
+		}
+		vb := getBlockWithTxs(t, sys.L2ELVerifier, n)
+		pe, _ := findPostExecTransaction(vb)
+		require.Nil(pe, "force-derived block %d must not contain a 0x7D post-exec tx (no sequenced activity)", n)
+		for i, tx := range vb.Transactions {
+			require.Equal(uint64(types.DepositTxType), uint64(tx.Type),
+				"force-derived block %d tx %d must be a deposit; deposit-only blocks carry no sequenced txs", n, i)
+		}
+		require.Equal(sys.L2EL.BlockRefByNumber(n).Hash, ref.Hash,
+			"sequencer and verifier must agree on force-derived block %d", n)
+		checked++
+	}
+	require.Greater(checked, 0, "expected at least one force-derived deposit-only block during downtime")
+	t.Logger().Info("Verified force-derived deposit-only range",
+		"from", lastLocalSafe.Number+1, "blocks_checked", checked)
+
+	// 7. Recovery: restart the batcher and let the force-derived chain gain margin before exiting
+	//    recovery mode, so resumed blocks are not reorged again (matches TestSequencingWindowExpiry).
+	sys.L2Batcher.Start()
+	dsl.CheckAll(t,
+		sys.L2CL.AdvancedFn(safety.LocalSafe, 20, 200),
+		sys.L2CL.AdvancedFn(safety.LocalUnsafe, 20, 200),
+	)
+	require.NoError(sys.L2CL.Escape().RollupAPI().SetRecoverMode(t.Ctx(), false))
+
+	// 8. SDM must resume: a fresh dense workload produces a new 0x7D block that derives safe on the
+	//    verifier with a matching hash.
+	resumeBlock, _, resumeNum := mustFindRepeatedSlotBlock(t, sys, 2, 5)
+	resumePostExec, _ := findPostExecTransaction(resumeBlock)
+	require.NotNil(resumePostExec, "SDM must resume producing 0x7D blocks after recovery")
+	resumeRef := sys.L2EL.BlockRefByNumber(resumeNum)
+	dsl.CheckAll(t,
+		sys.L2CLVerifier.ReachedRefFn(safety.CrossSafe, resumeRef.ID(), 200),
+		sys.L2ELVerifier.ReachedFn(eth.Safe, resumeNum, 200),
+	)
+	require.Equal(resumeRef.Hash, sys.L2ELVerifier.BlockRefByNumber(resumeNum).Hash,
+		"verifier must derive the resumed post-exec block byte-for-byte")
+	t.Logger().Info("TestSDMDepositOnlyDerivationOnSequencingWindowExpiry passed",
+		"post_exec_block", postExecBlockNum, "resumed_post_exec_block", resumeNum)
+}
+
 func addrPtr(addr common.Address) *common.Address {
 	return &addr
 }

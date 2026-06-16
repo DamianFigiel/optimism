@@ -14,6 +14,7 @@ import (
 
 type sdmRethSystem struct {
 	L1EL         *dsl.L1ELNode
+	L1Network    *dsl.L1Network
 	L2EL         *dsl.L2ELNode
 	L2CL         *dsl.L2CLNode
 	L2Network    *dsl.L2Network
@@ -78,6 +79,26 @@ func newSDMRethSystemWithInteropOffset(
 	return buildSDMRethSystem(t, false, false, deployerOpts, batcherOpts...)
 }
 
+// newSDMRethSystemWithSequencingWindow builds the SDM system (Interop/SDM at genesis, sequencer
+// opted in to PostExec production) with a small sequencing window. A short window lets a test
+// provoke sequencing-window expiry — when the batcher is stopped, op-node force-derives deposit-only
+// blocks straight from L1 — without waiting the production-default number of L1 blocks. This is the
+// "sequencer down, chain auto-derives" path: the force-derived blocks carry only deposits and must
+// not contain a PostExec (0x7D) tx.
+func newSDMRethSystemWithSequencingWindow(t devtest.T, seqWindow uint64) *sdmRethSystem {
+	// kona-node lacks an L1-only bootstrap of the force-build path (see the isolated-verifier note
+	// below); the verifier here must derive deposit-only blocks the same way, so this is op-node-only.
+	if sysgo.ResolveMixedL2CLKind() == sysgo.MixedL2CLKona {
+		t.Skip("sequencing-window force-derive path is not supported by kona-node; op-node only")
+	}
+	// Use singular batches: span batches during sequencing-window recovery don't align well with
+	// the restart point (see TestSequencingWindowExpiry's note), which would add flake unrelated
+	// to what this test checks.
+	return buildSDMRethSystem(t, true, false,
+		[]sysgo.DeployerOption{sysgo.WithSequencingWindow(seqWindow)},
+		withSingularBatcher)
+}
+
 func buildSDMRethSystem(t devtest.T, interopAtGenesis bool, isolateVerifier bool, deployerOpts []sysgo.DeployerOption, batcherOpts ...sysgo.BatcherOption) *sdmRethSystem {
 	sysgo.SkipOnOpGeth(t, "SDM acceptance tests require op-reth post-exec support")
 
@@ -126,6 +147,7 @@ func buildSDMRethSystem(t devtest.T, interopAtGenesis bool, isolateVerifier bool
 	wallet := dsl.NewRandomHDWallet(t, 30)
 	sys := &sdmRethSystem{
 		L1EL:         frontends.L1EL,
+		L1Network:    frontends.L1Network,
 		L2EL:         frontends.L2Network.PrimaryEL(),
 		L2CL:         frontends.L2Network.PrimaryCL(),
 		L2Network:    frontends.L2Network,
