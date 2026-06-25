@@ -120,7 +120,7 @@ parameters:
   c-run_l2_fork_test:
     type: boolean
     default: false
-  c-run_scheduled_weekly_tests:
+  c-run_daily_l2_fork_tests:
     type: boolean
     default: false
   c-run_contracts_feature_tests:
@@ -1484,11 +1484,11 @@ jobs:
           when: always
       - notify-failures-on-develop:
           mentions: "@security-oncall"
-      # Success notification only for the weekly scheduled run; this job also
+      # Success notification only for the daily scheduled run; this job also
       # runs in contracts-feature-tests (every develop merge) and the dispatch
       # workflow, where a per-run success ping would be noise.
       - when:
-          condition: << pipeline.parameters.c-run_scheduled_weekly_tests >>
+          condition: << pipeline.parameters.c-run_daily_l2_fork_tests >>
           steps:
             - slack/notify:
                 event: pass
@@ -2967,8 +2967,8 @@ workflows:
             - circleci-repo-rpc-secrets
             - slack
 
-  scheduled-weekly-tests:
-    when: << pipeline.parameters.c-run_scheduled_weekly_tests >>
+  daily-l2-fork-tests:
+    when: << pipeline.parameters.c-run_daily_l2_fork_tests >>
     jobs:
       - prep-go-modules:
           context:
