@@ -6,6 +6,7 @@ version: 2.1
 orbs:
   utils: ethereum-optimism/circleci-utils@1.0.27
   gcp-cli: circleci/gcp-cli@3.0.1
+  slack: circleci/slack@6.0.0
 
 parameters:
   c-default_docker_image:
@@ -638,7 +639,13 @@ jobs:
           name: Check links
           working_directory: rust/kona
           command: |
-            lychee --config ./lychee.toml --cache-exclude-status 429 '**/README.md' || true
+            lychee --config ./lychee.toml --cache-exclude-status 429 '**/README.md'
+      - notify-failures-on-develop
+      - slack/notify:
+          event: pass
+          branch_pattern: develop
+          channel: C03N11M0BBN
+          template: basic_success_1
 
   # Verifies that the committed `etc/{chainList,configs,depsets}.json` snapshots
   # in `kona-registry` match what `KONA_SYNC_SUPERCHAIN=true cargo build -p kona-registry`

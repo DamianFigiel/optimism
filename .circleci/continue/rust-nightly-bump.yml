@@ -12,6 +12,7 @@ parameters:
 
 orbs:
   github-cli: circleci/github-cli@2.7.0
+  slack: circleci/slack@6.0.0
 
 jobs:
   rust-nightly-bump:
@@ -31,8 +32,13 @@ jobs:
             echo "Latest nightly: ${LATEST}"
             echo "Current pin:    ${CURRENT}"
 
+            # Recorded for the Slack success notification so the message can
+            # report what the run actually did (opened a PR, or no-op'd).
+            record_summary() { printf 'export BUMP_SUMMARY=%q\n' "$1" >> "$BASH_ENV"; }
+
             if [ "${LATEST}" = "${CURRENT}" ]; then
               echo "Pin is already up to date. Nothing to do."
+              record_summary "Pinned nightly already up to date (${CURRENT}); no PR opened."
               exit 0
             fi
 
@@ -43,6 +49,7 @@ jobs:
             MANIFEST_URL="https://static.rust-lang.org/dist/${TODAY}/channel-rust-nightly.toml"
             if ! curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused -o /dev/null "${MANIFEST_URL}"; then
               echo "No nightly published for ${TODAY} yet (${MANIFEST_URL} unavailable). Nothing to do."
+              record_summary "No nightly published for ${TODAY}; no PR opened."
               exit 0
             fi
 
@@ -55,11 +62,32 @@ jobs:
             git -c user.email=ci@oplabs.co -c user.name="OP Labs CI" commit -m "ci: bump rust nightly pin to ${LATEST}"
             git push origin "${BRANCH}"
 
-            GH_TOKEN="${GITHUB_TOKEN_GOVERNANCE}" gh pr create \
+            if PR_URL=$(GH_TOKEN="${GITHUB_TOKEN_GOVERNANCE}" gh pr create \
               --title "ci: bump rust nightly pin to ${LATEST}" \
               --body "Automated weekly bump of the pinned nightly Rust toolchain from \`${CURRENT}\` to \`${LATEST}\`. CI on this PR will validate the new toolchain compiles cleanly." \
               --base develop \
-              --label "ci" || echo "PR may already exist for this branch."
+              --label "ci"); then
+              record_summary "Opened PR to bump nightly ${CURRENT} -> ${LATEST}: ${PR_URL}"
+            else
+              record_summary "Pushed ${BRANCH} (${CURRENT} -> ${LATEST}) but no PR URL returned; a PR may already exist."
+            fi
+      - slack/notify:
+          event: pass
+          branch_pattern: develop
+          channel: C03N11M0BBN
+          custom: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":crab: *Weekly Rust nightly bump* completed on `develop`.\n${BUMP_SUMMARY}"
+                  }
+                }
+              ]
+            }
+      - notify-failures-on-develop
 
 workflows:
   scheduled-rust-nightly-bump:
