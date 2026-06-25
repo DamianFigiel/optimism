@@ -1484,17 +1484,6 @@ jobs:
           when: always
       - notify-failures-on-develop:
           mentions: "@security-oncall"
-      # Success notification only for the daily scheduled run; this job also
-      # runs in contracts-feature-tests (every develop merge) and the dispatch
-      # workflow, where a per-run success ping would be noise.
-      - when:
-          condition: << pipeline.parameters.c-run_daily_l2_fork_tests >>
-          steps:
-            - slack/notify:
-                event: pass
-                branch_pattern: develop
-                channel: C03N11M0BBN
-                template: basic_success_1
 
   contracts-bedrock-upload:
     machine: true
@@ -2984,12 +2973,10 @@ workflows:
                 - ink
                 - mode
                 - metal
-                - arena-z
                 - swell
                 - unichain
                 - soneium
                 - world-chain
-                - base
                 - xlayer
           test_profile: ci
           context:
