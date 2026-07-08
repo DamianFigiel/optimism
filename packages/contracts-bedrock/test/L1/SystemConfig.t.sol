@@ -25,7 +25,6 @@ abstract contract SystemConfig_TestInit is CommonTest {
 
     bytes32 public constant EXAMPLE_FEATURE = "EXAMPLE_FEATURE";
 
-    address batchInbox;
     address owner;
     bytes32 batcherHash;
     uint64 gasLimit;
@@ -37,7 +36,6 @@ abstract contract SystemConfig_TestInit is CommonTest {
 
     function setUp() public virtual override {
         super.setUp();
-        batchInbox = deploy.cfg().batchInboxAddress();
         owner = deploy.cfg().finalSystemOwner();
         basefeeScalar = deploy.cfg().basefeeScalar();
         blobbasefeeScalar = deploy.cfg().blobbasefeeScalar();
@@ -80,8 +78,6 @@ contract SystemConfig_Constructor_Test is SystemConfig_TestInit {
         assertEq(actual.minimumBaseFee, 0);
         assertEq(actual.systemTxMaxGas, 0);
         assertEq(actual.maximumBaseFee, 0);
-        assertEq(impl.startBlock(), type(uint256).max);
-        assertEq(address(impl.batchInbox()), address(0));
         // Check addresses
         assertEq(address(impl.l1CrossDomainMessenger()), address(0));
         assertEq(address(impl.l1ERC721Bridge()), address(0));
@@ -125,10 +121,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
         assertEq(actual.minimumBaseFee, rcfg.minimumBaseFee);
         assertEq(actual.systemTxMaxGas, rcfg.systemTxMaxGas);
         assertEq(actual.maximumBaseFee, rcfg.maximumBaseFee);
-        // Depends on start block being set to 0 in `initialize`
-        uint256 cfgStartBlock = deploy.cfg().systemConfigStartBlock();
-        assertEq(systemConfig.startBlock(), (cfgStartBlock == 0 ? block.number : cfgStartBlock));
-        assertEq(address(systemConfig.batchInbox()), address(batchInbox));
 
         // Check address getters both for the single contract getter and the struct getter
         ISystemConfig.Addresses memory addrs = systemConfig.getAddresses();
@@ -164,7 +156,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
             _gasLimit: minimumGasLimit - 1,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -222,7 +213,6 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
             _gasLimit: minimumGasLimit - 1,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -238,17 +228,25 @@ contract SystemConfig_Initialize_Test is SystemConfig_TestInit {
     }
 }
 
-/// @title SystemConfig_StartBlock_Test
-/// @notice Test contract for SystemConfig `startBlock` function.
-contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
-    /// @notice Tests that startBlock is updated correctly when it's zero.
-    function test_startBlock_update_succeeds() external {
-        // Wipe out the initialized slot so the proxy can be initialized again
-        vm.store(address(systemConfig), bytes32(0), bytes32(0));
-        // Set slot startBlock to zero
-        vm.store(address(systemConfig), systemConfig.START_BLOCK_SLOT(), bytes32(uint256(0)));
+/// @title SystemConfig_LegacySlots_Test
+/// @notice Test contract for the legacy batch inbox and start block storage slots.
+contract SystemConfig_LegacySlots_Test is SystemConfig_TestInit {
+    /// @notice Legacy storage slot that the batch inbox address was stored at.
+    bytes32 internal constant LEGACY_BATCH_INBOX_SLOT = bytes32(uint256(keccak256("systemconfig.batchinbox")) - 1);
 
-        // Initialize and check that StartBlock updates to current block number
+    /// @notice Legacy storage slot that the start block was stored at.
+    bytes32 internal constant LEGACY_START_BLOCK_SLOT = bytes32(uint256(keccak256("systemconfig.startBlock")) - 1);
+
+    /// @notice Tests that initialization clears the legacy batch inbox and start block slots.
+    function test_initialize_clearsLegacySlots_succeeds() external {
+        // Simulate a chain that still has legacy values in storage.
+        vm.store(address(systemConfig), LEGACY_BATCH_INBOX_SLOT, bytes32(uint256(uint160(address(0xbeef)))));
+        vm.store(address(systemConfig), LEGACY_START_BLOCK_SLOT, bytes32(uint256(1234)));
+
+        // Wipe out the initialized slot so the proxy can be initialized again.
+        vm.store(address(systemConfig), bytes32(0), bytes32(0));
+
+        // Initialize and check that both legacy slots are cleared.
         vm.prank(address(systemConfig.proxyAdmin()));
         systemConfig.initialize({
             _owner: alice,
@@ -258,7 +256,6 @@ contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
             _gasLimit: gasLimit,
             _unsafeBlockSigner: address(1),
             _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),
@@ -271,40 +268,8 @@ contract SystemConfig_StartBlock_Test is SystemConfig_TestInit {
             _l2ChainId: 1234,
             _superchainConfig: ISuperchainConfig(address(0))
         });
-        assertEq(systemConfig.startBlock(), block.number);
-    }
-
-    /// @notice Tests that startBlock is not updated when it's not zero.
-    function test_startBlock_update_fails() external {
-        // Wipe out the initialized slot so the proxy can be initialized again
-        vm.store(address(systemConfig), bytes32(0), bytes32(0));
-        // Set slot startBlock to non-zero value 1
-        vm.store(address(systemConfig), systemConfig.START_BLOCK_SLOT(), bytes32(uint256(1)));
-
-        // Initialize and check that StartBlock doesn't update
-        vm.prank(address(systemConfig.proxyAdmin()));
-        systemConfig.initialize({
-            _owner: alice,
-            _basefeeScalar: basefeeScalar,
-            _blobbasefeeScalar: blobbasefeeScalar,
-            _batcherHash: bytes32(hex"abcd"),
-            _gasLimit: gasLimit,
-            _unsafeBlockSigner: address(1),
-            _config: Constants.DEFAULT_RESOURCE_CONFIG(),
-            _batchInbox: address(0),
-            _addresses: ISystemConfig.Addresses({
-                l1CrossDomainMessenger: address(0),
-                l1ERC721Bridge: address(0),
-                l1StandardBridge: address(0),
-                optimismPortal: address(0),
-                optimismMintableERC20Factory: address(0),
-                delayedWETH: address(0),
-                opcm: address(0)
-            }),
-            _l2ChainId: 1234,
-            _superchainConfig: ISuperchainConfig(address(0))
-        });
-        assertEq(systemConfig.startBlock(), 1);
+        assertEq(vm.load(address(systemConfig), LEGACY_BATCH_INBOX_SLOT), bytes32(0));
+        assertEq(vm.load(address(systemConfig), LEGACY_START_BLOCK_SLOT), bytes32(0));
     }
 }
 
@@ -608,7 +573,6 @@ contract SystemConfig_SetResourceConfig_Test is SystemConfig_TestInit {
             _gasLimit: gasLimit,
             _unsafeBlockSigner: address(0),
             _config: config,
-            _batchInbox: address(0),
             _addresses: ISystemConfig.Addresses({
                 l1CrossDomainMessenger: address(0),
                 l1ERC721Bridge: address(0),

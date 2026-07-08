@@ -1010,7 +1010,6 @@ contract OPContractsManagerV2 is ISemver, OPContractsManagerUtilsCaller {
                 _cfg.gasLimit,
                 _cfg.unsafeBlockSigner,
                 _cfg.resourceConfig,
-                _chainIdToBatchInboxAddress(_cfg.l2ChainId),
                 addrs,
                 _cfg.l2ChainId,
                 _cfg.superchainConfig

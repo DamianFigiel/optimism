@@ -92,11 +92,16 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
     /// @notice Storage slot that the OPCM address is stored at.
     bytes32 public constant OPCM_SLOT = bytes32(uint256(keccak256("systemconfig.opcm")) - 1);
 
-    /// @notice Storage slot that the batch inbox address is stored at.
-    bytes32 public constant BATCH_INBOX_SLOT = bytes32(uint256(keccak256("systemconfig.batchinbox")) - 1);
+    /// @notice Legacy storage slot that the batch inbox address was stored at. The OP Stack
+    ///         reads the batch inbox address from the rollup configuration and not from this
+    ///         contract, so the value is cleared during initialization to remove a redundant
+    ///         source of truth.
+    bytes32 internal constant LEGACY_BATCH_INBOX_SLOT = bytes32(uint256(keccak256("systemconfig.batchinbox")) - 1);
 
-    /// @notice Storage slot for block at which the op-node can start searching for logs from.
-    bytes32 public constant START_BLOCK_SLOT = bytes32(uint256(keccak256("systemconfig.startBlock")) - 1);
+    /// @notice Legacy storage slot that the start block was stored at. The OP Stack does not
+    ///         read the start block from this contract, so the value is cleared during
+    ///         initialization to remove a redundant source of truth.
+    bytes32 internal constant LEGACY_START_BLOCK_SLOT = bytes32(uint256(keccak256("systemconfig.startBlock")) - 1);
 
     /// @notice The maximum gas limit that can be set for L2 blocks. This limit is used to enforce that the blocks
     ///         on L2 are not too large to process and prove. Over time, this value can be increased as various
@@ -174,16 +179,13 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
     error SystemConfig_InvalidFeatureState();
 
     /// @notice Semantic version.
-    /// @custom:semver 3.14.2
+    /// @custom:semver 4.0.0
     function version() public pure virtual returns (string memory) {
-        return "3.14.2";
+        return "4.0.0";
     }
 
     /// @notice Constructs the SystemConfig contract.
-    /// @dev    START_BLOCK_SLOT is set to type(uint256).max here so that it will be a dead value
-    ///         in the singleton.
-    constructor() ReinitializableBase(3) {
-        Storage.setUint(START_BLOCK_SLOT, type(uint256).max);
+    constructor() ReinitializableBase(4) {
         _disableInitializers();
     }
 
@@ -196,8 +198,6 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
     /// @param _gasLimit          Initial gas limit.
     /// @param _unsafeBlockSigner Initial unsafe block signer address.
     /// @param _config            Initial ResourceConfig.
-    /// @param _batchInbox        Batch inbox address. An identifier for the op-node to find
-    ///                           canonical data.
     /// @param _addresses         Set of L1 contract addresses. These should be the proxies.
     /// @param _l2ChainId         The L2 chain ID that this SystemConfig configures.
     /// @param _superchainConfig  The SuperchainConfig contract address.
@@ -209,7 +209,6 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
         uint64 _gasLimit,
         address _unsafeBlockSigner,
         IResourceMetering.ResourceConfig memory _config,
-        address _batchInbox,
         SystemConfig.Addresses memory _addresses,
         uint256 _l2ChainId,
         ISuperchainConfig _superchainConfig
@@ -230,7 +229,6 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
         _setGasLimit(_gasLimit);
 
         Storage.setAddress(UNSAFE_BLOCK_SIGNER_SLOT, _unsafeBlockSigner);
-        Storage.setAddress(BATCH_INBOX_SLOT, _batchInbox);
         Storage.setAddress(L1_CROSS_DOMAIN_MESSENGER_SLOT, _addresses.l1CrossDomainMessenger);
         Storage.setAddress(L1_ERC_721_BRIDGE_SLOT, _addresses.l1ERC721Bridge);
         Storage.setAddress(L1_STANDARD_BRIDGE_SLOT, _addresses.l1StandardBridge);
@@ -238,7 +236,12 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
         Storage.setAddress(OPTIMISM_MINTABLE_ERC20_FACTORY_SLOT, _addresses.optimismMintableERC20Factory);
         Storage.setAddress(DELAYED_WETH_SLOT, _addresses.delayedWETH);
         Storage.setAddress(OPCM_SLOT, _addresses.opcm);
-        _setStartBlock();
+
+        // Clear the legacy batch inbox address and start block slots. These values are unused
+        // by the OP Stack, which reads them from the rollup configuration instead. Clearing
+        // removes a redundant source of truth that could otherwise drift from the real values.
+        Storage.setAddress(LEGACY_BATCH_INBOX_SLOT, address(0));
+        Storage.setUint(LEGACY_START_BLOCK_SLOT, 0);
 
         _setResourceConfig(_config);
 
@@ -329,16 +332,6 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
             delayedWETH: delayedWETH(),
             opcm: lastUsedOPCM()
         });
-    }
-
-    /// @notice Getter for the BatchInbox address.
-    function batchInbox() external view returns (address addr_) {
-        addr_ = Storage.getAddress(BATCH_INBOX_SLOT);
-    }
-
-    /// @notice Getter for the StartBlock number.
-    function startBlock() external view returns (uint256 startBlock_) {
-        startBlock_ = Storage.getUint(START_BLOCK_SLOT);
     }
 
     /// @notice Updates the unsafe block signer address. Can only be called by the owner.
@@ -497,21 +490,6 @@ contract SystemConfig is ProxyAdminOwnedBase, OwnableUpgradeable, Reinitializabl
 
         bytes memory data = abi.encode(_dAFootprintGasScalar);
         emit ConfigUpdate(VERSION, UpdateType.DA_FOOTPRINT_GAS_SCALAR, data);
-    }
-
-    /// @notice Sets the start block in a backwards compatible way. Proxies
-    ///         that were initialized before the startBlock existed in storage
-    ///         can have their start block set by a user provided override.
-    ///         A start block of 0 indicates that there is no override and the
-    ///         start block will be set by `block.number`.
-    /// @dev    This logic is used to patch legacy deployments with new storage values.
-    ///         Use the override if it is provided as a non zero value and the value
-    ///         has not already been set in storage. Use `block.number` if the value
-    ///         has already been set in storage
-    function _setStartBlock() internal {
-        if (Storage.getUint(START_BLOCK_SLOT) == 0) {
-            Storage.setUint(START_BLOCK_SLOT, block.number);
-        }
     }
 
     /// @notice A getter for the resource config.

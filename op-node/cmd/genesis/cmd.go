@@ -3,12 +3,12 @@ package genesis
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
-	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/urfave/cli/v2"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
@@ -164,24 +164,35 @@ var Subcommands = cli.Commands{
 				return errors.New("missing l2-allocs")
 			}
 
-			// Retrieve SystemConfig.startBlock()
+			// Resolve the L1 start block from the deploy config's l1StartingBlockTag. Older
+			// versions of this command read SystemConfig.startBlock(), but that getter was
+			// removed from the SystemConfig contract because nothing in the OP Stack reads it.
 			client, err := ethclient.Dial(l1RPC)
 			if err != nil {
 				return fmt.Errorf("cannot dial %s: %w", l1RPC, err)
 			}
 
-			caller := batching.NewMultiCaller(client.Client(), batching.DefaultBatchSize)
-			sysCfg := NewSystemConfigContract(caller, config.SystemConfigProxy)
-			startBlock, err := sysCfg.StartBlock(ctx.Context)
-			if err != nil {
-				return fmt.Errorf("failed to fetch startBlock from SystemConfig: %w", err)
+			if config.L1StartingBlockTag == nil {
+				return errors.New("l1StartingBlockTag must be set in the deploy config")
+			}
+			var fetchL1StartBlock func() (*types.Block, error)
+			if number, ok := config.L1StartingBlockTag.Number(); ok {
+				fetchL1StartBlock = func() (*types.Block, error) {
+					return client.BlockByNumber(ctx.Context, big.NewInt(number.Int64()))
+				}
+			} else if hash, ok := config.L1StartingBlockTag.Hash(); ok {
+				fetchL1StartBlock = func() (*types.Block, error) {
+					return client.BlockByHash(ctx.Context, hash)
+				}
+			} else {
+				return fmt.Errorf("invalid l1StartingBlockTag: %s", config.L1StartingBlockTag.String())
 			}
 
-			logger.Info("Using L1 Start Block", "number", startBlock)
+			logger.Info("Using L1 Start Block", "tag", config.L1StartingBlockTag.String())
 			// retry because local devnet can experience a race condition where L1 geth isn't ready yet
-			l1StartBlock, err := retry.Do(ctx.Context, 24, retry.Fixed(1*time.Second), func() (*types.Block, error) { return client.BlockByNumber(ctx.Context, startBlock) })
+			l1StartBlock, err := retry.Do(ctx.Context, 24, retry.Fixed(1*time.Second), fetchL1StartBlock)
 			if err != nil {
-				return fmt.Errorf("fetching start block by number: %w", err)
+				return fmt.Errorf("fetching L1 start block: %w", err)
 			}
 			logger.Info("Fetched L1 Start Block", "hash", l1StartBlock.Hash().Hex())
 

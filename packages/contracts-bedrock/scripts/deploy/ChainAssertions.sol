@@ -35,7 +35,6 @@ import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
 import { IProxyAdminOwnedBase } from "interfaces/universal/IProxyAdminOwnedBase.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
-import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
 import { IZKDisputeGame } from "interfaces/dispute/zk/IZKDisputeGame.sol";
 
 library ChainAssertions {
@@ -79,8 +78,6 @@ library ChainAssertions {
         require(resourceConfig.minimumBaseFee == 0, "CHECK-SCFG-340");
         require(resourceConfig.maximumBaseFee == 0, "CHECK-SCFG-350");
         // Check _addresses
-        require(config.startBlock() == type(uint256).max, "CHECK-SCFG-360");
-        require(config.batchInbox() == address(0), "CHECK-SCFG-370");
         require(config.l1CrossDomainMessenger() == address(0), "CHECK-SCFG-380");
         require(config.l1ERC721Bridge() == address(0), "CHECK-SCFG-390");
         require(config.l1StandardBridge() == address(0), "CHECK-SCFG-400");
@@ -109,14 +106,6 @@ library ChainAssertions {
         require(config.gasLimit() == uint64(_doi.gasLimit), "CHECK-SCFG-50");
         require(config.unsafeBlockSigner() == _doi.unsafeBlockSigner, "CHECK-SCFG-60");
         require(config.scalar() >> 248 == 1, "CHECK-SCFG-70");
-        // Depends on start block being set to 0 in `initialize`
-        require(config.startBlock() == block.number, "CHECK-SCFG-140");
-        require(
-            config.batchInbox()
-                == IOPContractsManagerUtils(IOPContractsManagerV2(address(_doi.opcm)).opcmUtils())
-                    .chainIdToBatchInboxAddress(_doi.l2ChainId),
-            "CHECK-SCFG-150"
-        );
         // Check _addresses
         require(config.l1CrossDomainMessenger() == _contracts.L1CrossDomainMessenger, "CHECK-SCFG-160");
         require(config.l1ERC721Bridge() == _contracts.L1ERC721Bridge, "CHECK-SCFG-170");

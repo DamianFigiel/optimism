@@ -35,19 +35,16 @@ interface ISystemConfig is IProxyAdminOwnedBase {
     event Initialized(uint8 version);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    function BATCH_INBOX_SLOT() external view returns (bytes32);
     function L1_CROSS_DOMAIN_MESSENGER_SLOT() external view returns (bytes32);
     function L1_ERC_721_BRIDGE_SLOT() external view returns (bytes32);
     function L1_STANDARD_BRIDGE_SLOT() external view returns (bytes32);
     function OPTIMISM_MINTABLE_ERC20_FACTORY_SLOT() external view returns (bytes32);
     function OPTIMISM_PORTAL_SLOT() external view returns (bytes32);
     function DELAYED_WETH_SLOT() external view returns (bytes32);
-    function START_BLOCK_SLOT() external view returns (bytes32);
     function UNSAFE_BLOCK_SIGNER_SLOT() external view returns (bytes32);
     function OPCM_SLOT() external view returns (bytes32);
     function VERSION() external view returns (uint256);
     function basefeeScalar() external view returns (uint32);
-    function batchInbox() external view returns (address addr_);
     function batcherHash() external view returns (bytes32);
     function blobbasefeeScalar() external view returns (uint32);
     function disputeGameFactory() external view returns (address addr_);
@@ -63,7 +60,6 @@ interface ISystemConfig is IProxyAdminOwnedBase {
         uint64 _gasLimit,
         address _unsafeBlockSigner,
         IResourceMetering.ResourceConfig memory _config,
-        address _batchInbox,
         Addresses memory _addresses,
         uint256 _l2ChainId,
         ISuperchainConfig _superchainConfig
@@ -100,7 +96,6 @@ interface ISystemConfig is IProxyAdminOwnedBase {
     function setEIP1559Params(uint32 _denominator, uint32 _elasticity) external;
     function setMinBaseFee(uint64 _minBaseFee) external;
     function setDAFootprintGasScalar(uint16 _daFootprintGasScalar) external;
-    function startBlock() external view returns (uint256 startBlock_);
     function transferOwnership(address newOwner) external; // nosemgrep
     function unsafeBlockSigner() external view returns (address addr_);
     function version() external pure returns (string memory);
