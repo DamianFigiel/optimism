@@ -35,19 +35,17 @@ type TxReceiver struct {
 	txs <-chan *txplan.PlannedTx
 }
 
-func (tp *TxProducer) NewFunder() *dsl.EOA {
-	return tp.out.Funder.AsFunder(tp.out.L2ELSequencerNodes()[0])
-}
-
 func (tp *TxProducer) NewAccounts(count int, fundAmount eth.ETH) []*dsl.EOA {
-	new_accounts := tp.NewFunder().NewFundedEOAs(count, fundAmount)
+	// All producers share the preset's single FunderEOA: it manages nonces
+	// internally, so concurrent funding across producer goroutines is safe.
+	new_accounts := tp.out.Funder.NewFundedEOAs(count, fundAmount)
 	tp.accounts = append(tp.accounts, new_accounts...)
 
 	return new_accounts
 }
 
 func (tp *TxProducer) NewAccount(fundAmount eth.ETH) *dsl.EOA {
-	new_account := tp.NewFunder().NewFundedEOA(fundAmount)
+	new_account := tp.out.Funder.NewFundedEOA(fundAmount)
 	tp.accounts = append(tp.accounts, new_account)
 
 	return new_account
@@ -82,7 +80,7 @@ func (tp *TxProducer) Start(wg *sync.WaitGroup) {
 			fromAccount := tp.accounts[rand.Intn(len(tp.accounts))]
 
 			if fromAccount.GetBalance().Lt(eth.HalfEther) {
-				tp.NewFunder().FundAtLeast(fromAccount, eth.HalfEther)
+				tp.out.Funder.FundAtLeast(fromAccount, eth.HalfEther)
 			}
 
 			amount := fromAccount.GetBalance().Mul(uint64(rand.Intn(100))).Div(100)

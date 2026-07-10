@@ -20,7 +20,7 @@ type sdmRethSystem struct {
 	L2ELVerifier *dsl.L2ELNode
 	L2CLVerifier *dsl.L2CLNode
 	L2Batcher    *dsl.L2Batcher
-	FunderL2     *dsl.EOA
+	FunderL2     *dsl.FunderEOA
 }
 
 func newSDMRethSystem(t devtest.T, sdmEnabled bool) *sdmRethSystem {
