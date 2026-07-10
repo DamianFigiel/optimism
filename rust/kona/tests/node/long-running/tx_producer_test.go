@@ -35,8 +35,8 @@ type TxReceiver struct {
 	txs <-chan *txplan.PlannedTx
 }
 
-func (tp *TxProducer) NewFunder() *dsl.Funder {
-	return dsl.NewFunder(tp.out.Wallet, tp.out.Faucet, tp.out.L2ELSequencerNodes()[0])
+func (tp *TxProducer) NewFunder() *dsl.EOA {
+	return tp.out.Funder.AsFunder(tp.out.L2ELSequencerNodes()[0])
 }
 
 func (tp *TxProducer) NewAccounts(count int, fundAmount eth.ETH) []*dsl.EOA {

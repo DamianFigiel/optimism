@@ -20,7 +20,7 @@ type sdmRethSystem struct {
 	L2ELVerifier *dsl.L2ELNode
 	L2CLVerifier *dsl.L2CLNode
 	L2Batcher    *dsl.L2Batcher
-	FunderL2     *dsl.Funder
+	FunderL2     *dsl.EOA
 }
 
 func newSDMRethSystem(t devtest.T, sdmEnabled bool) *sdmRethSystem {
@@ -123,7 +123,6 @@ func buildSDMRethSystem(t devtest.T, interopAtGenesis bool, isolateVerifier bool
 	t.Require().NotNil(verifierEL, "missing SDM verifier EL node")
 	t.Require().NotNil(verifierCL, "missing SDM verifier CL node")
 
-	wallet := dsl.NewRandomHDWallet(t, 30)
 	sys := &sdmRethSystem{
 		L1EL:         frontends.L1EL,
 		L2EL:         frontends.L2Network.PrimaryEL(),
@@ -132,7 +131,7 @@ func buildSDMRethSystem(t devtest.T, interopAtGenesis bool, isolateVerifier bool
 		L2ELVerifier: verifierEL,
 		L2CLVerifier: verifierCL,
 		L2Batcher:    frontends.L2Batcher,
-		FunderL2:     dsl.NewFunder(wallet, frontends.FaucetL2, frontends.L2Network.PrimaryEL()),
+		FunderL2:     frontends.FunderL2,
 	}
 
 	// The protocol gate (Interop hardfork) is already scheduled above when
