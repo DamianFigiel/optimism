@@ -16,6 +16,7 @@ import (
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr/metrics"
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -185,12 +186,97 @@ func (t *KeyedBroadcaster) broadcast(ctx context.Context, bcast script.Broadcast
 	ch := make(chan txmgr.SendResponse, 1)
 
 	id := bcast.ID()
-	candidate := asTxCandidate(bcast, blockGasLimit)
+	candidate := asTxCandidate(bcast, t.gasLimitFor(ctx, bcast, blockGasLimit))
 	t.mgr.SendAsync(ctx, candidate, ch)
 	return ch, id
 }
 
-func asTxCandidate(bcast script.Broadcast, blockGasLimit uint64) txmgr.TxCandidate {
+// gasEstimator estimates the gas required for a message call against the target
+// chain. *ethclient.Client satisfies it; tests use a stub.
+type gasEstimator interface {
+	EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error)
+}
+
+// gasLimitFor computes the gas limit to use for a broadcast transaction by
+// taking the larger of a live eth_estimateGas against the target chain and the
+// simulation-derived estimate (bcast.GasUsed).
+//
+// Why the live estimate is needed: op-deployer's in-process script simulator
+// runs a fixed Cancun-era gas schedule (see op-chain-ops/script), so the
+// recorded bcast.GasUsed omits post-Cancun code-deposit repricing - in
+// particular Glamsterdam's EIP-8037, which raises the code-deposit cost from 200
+// to 1530 gas/byte (~8x). Against such a chain the simulated estimate is far too
+// low and the transaction fails with "contract creation code storage out of
+// gas". This bites any flow that deploys contract code, whether directly
+// (bootstrap superchain/implementations, via CREATE/CREATE2) or indirectly
+// through a contract that CREATEs internally (op-deployer apply / manage migrate,
+// via a CALL to OPCM), so it must apply to all broadcast types.
+//
+// Why we keep the simulated value as a floor: a live estimate can legitimately
+// fail or come back low for a broadcast that depends on state produced by an
+// earlier, not-yet-mined transaction in the same bundle (the whole bundle is
+// applied together in the simulator, but not yet on chain). Taking max(live,
+// simulated) - and falling back to simulated on estimation error - means this is
+// never worse than the previous simulation-only behaviour.
+//
+// The CallMsg intentionally leaves Gas unset so the node bounds its search by the
+// block gas limit rather than the per-tx cap (params.MaxTxGas, 2^24), which is
+// required for large post-Amsterdam deploys whose code deposit alone exceeds
+// 2^24 gas.
+func (t *KeyedBroadcaster) gasLimitFor(ctx context.Context, bcast script.Broadcast, blockGasLimit uint64) uint64 {
+	return estimatedGasLimit(ctx, t.client, t.mgr.From(), bcast, blockGasLimit, t.lgr)
+}
+
+func estimatedGasLimit(ctx context.Context, est gasEstimator, from common.Address, bcast script.Broadcast, blockGasLimit uint64, lgr log.Logger) uint64 {
+	creation := bcast.Type != script.BroadcastCall
+	simulated := padGasLimit(bcast.Input, bcast.GasUsed, creation, blockGasLimit)
+
+	msg := ethereum.CallMsg{From: from}
+	switch bcast.Type {
+	case script.BroadcastCall:
+		to := bcast.To
+		msg.To = &to
+		msg.Data = bcast.Input
+		msg.Value = ((*uint256.Int)(bcast.Value)).ToBig()
+	case script.BroadcastCreate:
+		msg.Data = bcast.Input
+	case script.BroadcastCreate2:
+		data := make([]byte, len(bcast.Salt)+len(bcast.Input))
+		copy(data, bcast.Salt[:])
+		copy(data[len(bcast.Salt):], bcast.Input)
+		msg.To = &script.DeterministicDeployerAddress
+		msg.Data = data
+		msg.Value = ((*uint256.Int)(bcast.Value)).ToBig()
+	default:
+		return simulated
+	}
+
+	estimate, err := est.EstimateGas(ctx, msg)
+	if err != nil {
+		// Expected for broadcasts that depend on earlier, not-yet-mined bundle
+		// txs (common for calls). Fall back to the simulated estimate. It is
+		// logged more loudly for creations, where a fallback is more likely to
+		// under-gas.
+		if creation {
+			lgr.Warn("live gas estimate for creation failed; using simulated estimate", "id", bcast.ID(), "err", err)
+		} else {
+			lgr.Debug("live gas estimate for call failed; using simulated estimate", "id", bcast.ID(), "err", err)
+		}
+		return simulated
+	}
+
+	limit := uint64(float64(estimate) * GasPadFactor)
+	if limit > blockGasLimit {
+		limit = blockGasLimit
+	}
+	// Never drop below the simulated estimate.
+	if simulated > limit {
+		limit = simulated
+	}
+	return limit
+}
+
+func asTxCandidate(bcast script.Broadcast, gasLimit uint64) txmgr.TxCandidate {
 	value := ((*uint256.Int)(bcast.Value)).ToBig()
 	var candidate txmgr.TxCandidate
 	switch bcast.Type {
@@ -200,13 +286,13 @@ func asTxCandidate(bcast script.Broadcast, blockGasLimit uint64) txmgr.TxCandida
 			TxData:   bcast.Input,
 			To:       to,
 			Value:    value,
-			GasLimit: padGasLimit(bcast.Input, bcast.GasUsed, false, blockGasLimit),
+			GasLimit: gasLimit,
 		}
 	case script.BroadcastCreate:
 		candidate = txmgr.TxCandidate{
 			TxData:   bcast.Input,
 			To:       nil,
-			GasLimit: padGasLimit(bcast.Input, bcast.GasUsed, true, blockGasLimit),
+			GasLimit: gasLimit,
 		}
 	case script.BroadcastCreate2:
 		txData := make([]byte, len(bcast.Salt)+len(bcast.Input))
@@ -217,7 +303,7 @@ func asTxCandidate(bcast script.Broadcast, blockGasLimit uint64) txmgr.TxCandida
 			TxData:   txData,
 			To:       &script.DeterministicDeployerAddress,
 			Value:    value,
-			GasLimit: padGasLimit(bcast.Input, bcast.GasUsed, true, blockGasLimit),
+			GasLimit: gasLimit,
 		}
 	default:
 		panic(fmt.Sprintf("unrecognized broadcast type: '%s'", bcast.Type))
