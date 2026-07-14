@@ -9511,6 +9511,7 @@ dependencies = [
  "clap",
  "jsonrpsee",
  "op-alloy-consensus",
+ "op-alloy-rpc-types",
  "op-alloy-rpc-types-engine",
  "op-revm",
  "reth-chain-state",
