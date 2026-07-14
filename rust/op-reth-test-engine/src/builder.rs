@@ -170,8 +170,8 @@ impl InFlightPayload {
         // the `raw` bytes `decode_2718_exact` just consumed in full.
         let tx_hash = keccak256(raw);
 
-        // Re-run the whole list with the candidate appended. On any execution error the candidate is
-        // not retained, so the in-flight payload is unchanged.
+        // Re-run the whole list with the candidate appended. On any execution error the candidate
+        // is not retained, so the in-flight payload is unchanged.
         let mut txs = self.all_txs();
         txs.push(tx.clone());
         let built = chain.assemble_block(self.parent_hash, self.next_env.clone(), &txs)?;
@@ -197,11 +197,13 @@ impl InFlightPayload {
 #[cfg(test)]
 mod tests {
     use super::IncludeTxOutcome;
-    use crate::testsupport::{
-        GAS_LIMIT, deposit_tx, depositor, encode, fcu, payload_attrs, test_engine, user_sender,
-        user_tx, user_tx_with_gas,
+    use crate::{
+        Error, TestEngine,
+        testsupport::{
+            GAS_LIMIT, deposit_tx, depositor, encode, fcu, payload_attrs, test_engine, user_sender,
+            user_tx, user_tx_with_gas,
+        },
     };
-    use crate::{Error, TestEngine};
 
     use alloy_consensus::{BlockHeader, TxReceipt, transaction::SignerRecoverable};
     use alloy_primitives::B256;

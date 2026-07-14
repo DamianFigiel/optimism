@@ -112,6 +112,26 @@ impl EphemeralChain {
         Ok(self.provider.header(hash)?.map(|header| SealedHeader::new(header, hash)))
     }
 
+    /// The chain id.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_spec.chain().id()
+    }
+
+    /// The sealed header of the current canonical head (the `latest` block).
+    pub fn latest_header(&self) -> SealedHeader {
+        self.provider.canonical_in_memory_state().get_canonical_head()
+    }
+
+    /// The sealed header of the current `safe` block, or `None` if unset.
+    pub fn safe_header(&self) -> Option<SealedHeader> {
+        self.provider.canonical_in_memory_state().get_safe_header()
+    }
+
+    /// The sealed header of the current `finalized` block, or `None` if unset.
+    pub fn finalized_header(&self) -> Option<SealedHeader> {
+        self.provider.canonical_in_memory_state().get_finalized_header()
+    }
+
     /// Assemble a block on top of `parent_hash` from `next_env` and `txs`, computing all roots.
     ///
     /// This drives reth's [`BlockBuilder`] end-to-end: it opens a fresh bundle state over the
@@ -174,7 +194,7 @@ impl EphemeralChain {
     ///
     /// Returns `Ok(false)` without mutating anything if `head` is unknown to the chain, which the
     /// engine maps to `SYNCING`. A zero `safe`/`finalized` hash is skipped; a non-zero one that is
-    /// unknown is an [`Error::UnknownForkchoiceBlock`](crate::Error::UnknownForkchoiceBlock). All
+    /// unknown is an [`Error::UnknownForkchoiceBlock`]. All
     /// three are resolved before any pointer is moved.
     pub(crate) fn advance_forkchoice(
         &self,

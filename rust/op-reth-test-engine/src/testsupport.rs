@@ -1,8 +1,7 @@
 //! Shared test helpers for driving the engine over its public API: an ephemeral OP chain with
 //! Karst active at genesis, plus builders for payload attributes, deposits, and user transactions.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_eips::eip2718::Encodable2718;
@@ -145,7 +144,8 @@ pub(crate) fn encode(tx: &OpTransactionSigned) -> Bytes {
 }
 
 /// Payload attributes building on the given timestamp with the given forced deposit transactions.
-/// Sets the Holocene/Jovian EIP-1559 params and min base fee so block assembly succeeds under Karst.
+/// Sets the Holocene/Jovian EIP-1559 params and min base fee so block assembly succeeds under
+/// Karst.
 pub(crate) fn payload_attrs(
     timestamp: u64,
     deposits: Vec<Bytes>,

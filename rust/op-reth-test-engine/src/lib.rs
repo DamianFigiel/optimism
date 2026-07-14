@@ -12,6 +12,7 @@
 mod builder;
 mod chain;
 mod exec;
+pub mod rpc;
 #[cfg(test)]
 mod testsupport;
 
@@ -95,7 +96,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// Constructs an ephemeral genesis-initialized chain, answers read-only chain queries, imports
 /// blocks via [`new_payload`](Self::new_payload), advances the head via
 /// [`forkchoice_updated`](Self::forkchoice_updated), and builds payloads statefully
-/// (forkchoice-with-attributes → [`include_tx`](Self::include_tx)\* → [`get_payload`](Self::get_payload)).
+/// (forkchoice-with-attributes → [`include_tx`](Self::include_tx)\* →
+/// [`get_payload`](Self::get_payload)).
 #[derive(Debug)]
 pub struct TestEngine {
     chain: EphemeralChain,
@@ -133,9 +135,9 @@ impl TestEngine {
     ///
     /// Advances the canonical/safe/finalized pointers: a known `head` yields `VALID`, an unknown
     /// `head` yields `SYNCING` (never a silent `VALID`), and an unknown non-zero `safe`/`finalized`
-    /// is an [`Error::UnknownForkchoiceBlock`]. When `attributes` is `Some`, a new payload is opened
-    /// on top of `head` and its [`PayloadId`] is returned; the deposits are applied immediately, so
-    /// invalid attributes error here (mirroring op-geth's `startBlock`).
+    /// is an [`Error::UnknownForkchoiceBlock`]. When `attributes` is `Some`, a new payload is
+    /// opened on top of `head` and its [`PayloadId`] is returned; the deposits are applied
+    /// immediately, so invalid attributes error here (mirroring op-geth's `startBlock`).
     pub fn forkchoice_updated(
         &mut self,
         state: ForkchoiceState,
@@ -165,8 +167,9 @@ impl TestEngine {
     /// Include a raw pool transaction in the block being built (`optest_includeTx`).
     ///
     /// Targets `id`, or the most recently opened payload when `id` is `None`. Returns
-    /// [`IncludeTxOutcome::Skipped`] under force-empty, and errors with [`Error::NotBuildingBlock`],
-    /// [`Error::ExceedsGasLimit`], or [`Error::UsesTooMuchGas`] as the op-geth engine API does.
+    /// [`IncludeTxOutcome::Skipped`] under force-empty, and errors with
+    /// [`Error::NotBuildingBlock`], [`Error::ExceedsGasLimit`], or [`Error::UsesTooMuchGas`] as
+    /// the op-geth engine API does.
     pub fn include_tx(&mut self, id: Option<PayloadId>, raw: &[u8]) -> Result<IncludeTxOutcome> {
         let id = self.resolve_id(id)?;
         let chain = &self.chain;
