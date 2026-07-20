@@ -13426,6 +13426,7 @@ dependencies = [
  "eyre",
  "futures",
  "futures-util",
+ "libc",
  "op-alloy-consensus",
  "op-alloy-network",
  "op-alloy-rpc-types-engine",
