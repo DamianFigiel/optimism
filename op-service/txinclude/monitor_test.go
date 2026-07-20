@@ -6,20 +6,20 @@ import (
 	"testing"
 	"time"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
 )
 
 // mockReceiptGetter implements ReceiptGetter for testing
 type mockReceiptGetter struct {
-	receipt *types.Receipt
+	receipt *optypes.Receipt
 	errs    []error
 	calls   uint64
 }
 
-func (m *mockReceiptGetter) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+func (m *mockReceiptGetter) TransactionReceipt(ctx context.Context, hash common.Hash) (*optypes.Receipt, error) {
 	call := m.calls
 	m.calls++
 	if call < uint64(len(m.errs)) {
@@ -30,7 +30,7 @@ func (m *mockReceiptGetter) TransactionReceipt(ctx context.Context, hash common.
 
 func TestMonitorReceiptFound(t *testing.T) {
 	inner := &mockReceiptGetter{
-		receipt: &types.Receipt{},
+		receipt: &optypes.Receipt{},
 	}
 	monitor := NewMonitor(inner, time.Millisecond)
 	receipt, err := monitor.TransactionReceipt(context.Background(), inner.receipt.TxHash)
@@ -41,7 +41,7 @@ func TestMonitorReceiptFound(t *testing.T) {
 func TestMonitorTransientError(t *testing.T) {
 	inner := &mockReceiptGetter{
 		errs:    []error{ethereum.NotFound},
-		receipt: &types.Receipt{},
+		receipt: &optypes.Receipt{},
 	}
 	receipt, err := NewMonitor(inner, time.Millisecond).TransactionReceipt(context.Background(), inner.receipt.TxHash)
 	require.NoError(t, err)

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	optypes "github.com/ethereum-optimism/optimism/op-core/types"
 	opnodecfg "github.com/ethereum-optimism/optimism/op-node/config"
 	rollupNode "github.com/ethereum-optimism/optimism/op-node/node"
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
@@ -24,7 +25,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supernode/supernode/resources"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -250,7 +250,7 @@ func (m *mockEngineController) OutputV0ByBlockHash(ctx context.Context, blockHas
 	return nil, nil
 }
 
-func (m *mockEngineController) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, types.Receipts, error) {
+func (m *mockEngineController) FetchReceipts(ctx context.Context, blockHash common.Hash) (eth.BlockInfo, optypes.Receipts, error) {
 	return nil, nil, nil
 }
 
