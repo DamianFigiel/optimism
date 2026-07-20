@@ -273,6 +273,54 @@ jobs:
           working_directory: <<parameters.directory>>
           no_output_timeout: 40m
           command: just <<parameters.command>> <<parameters.flags>>
+      # Upload per-test results (from the [profile.default.junit] config in
+      # rust/.config/nextest.toml) to CircleCI's Tests tab — the first test-results for
+      # rust CI, which previously had none. This gives normal pass/fail/timing visibility;
+      # it does NOT surface a retried flake, because CircleCI ignores nextest's
+      # <flakyFailure> element (hence the Slack step below). `when: always` so a failed
+      # run's results upload too.
+      - store_test_results:
+          path: <<parameters.directory>>/target/nextest
+          when: always
+      # Keep the raw JUnit report (written by the [profile.default.junit] config in
+      # rust/.config/nextest.toml) as a downloadable artifact. For a retried flake this is
+      # where the failed attempt's captured stderr — including the crash backtrace — lives.
+      - store_artifacts:
+          path: <<parameters.directory>>/target/nextest
+          destination: nextest-junit
+          when: always
+      # A retried flake (e.g. the eth69 teardown SIGSEGV, #20973) passes on rerun and
+      # leaves the job GREEN, so nothing else surfaces it — CircleCI does not parse
+      # nextest's <flakyFailure> element, so store_test_results/Insights stay blind. Detect
+      # it ourselves and ping Slack. Every occurrence is a rare, precious data point (the
+      # crash has never reproduced locally), so alert on every branch, not just develop —
+      # a stack lost on a PR run is a stack lost. Fork PRs get no SLACK_ACCESS_TOKEN and
+      # self-skip. Only tests with a retry override can emit <flakyFailure>, so today this
+      # fires only for the one tracked flake. This step must never fail the job (the retry
+      # passing is the whole point).
+      - run:
+          name: Alert Slack on a flaky retry
+          when: always
+          working_directory: <<parameters.directory>>
+          command: |
+            junit="target/nextest/default/junit.xml"
+            if [ ! -f "$junit" ] || ! grep -q '<flakyFailure' "$junit"; then
+              echo "no flaky retries recorded"; exit 0
+            fi
+            if [ -z "${SLACK_ACCESS_TOKEN:-}" ]; then
+              echo "flaky retry detected but SLACK_ACCESS_TOKEN is unset; cannot notify"; exit 0
+            fi
+            # testcase name precedes its <flakyFailure> child; collect the distinct ones.
+            tests=$(awk -F'"' '/<testcase /{n=$2} /<flakyFailure/{print n}' "$junit" | sort -u | paste -sd, -)
+            [ -n "$tests" ] || tests="unknown"
+            text=":rotating_light: <@U04J4QNR84S> <@U09HDPERU78> nextest flaky retry on job $CIRCLE_JOB (branch ${CIRCLE_BRANCH}): $tests passed only after a crash/failed attempt (likely the #20973 teardown SIGSEGV). Backtrace is in the nextest-junit artifact: $CIRCLE_BUILD_URL"
+            # text is free of double-quotes and backslashes, so it drops into the JSON as-is.
+            payload=$(printf '{"channel":"C03N11M0BBN","text":"%s","unfurl_links":false}' "$text")
+            curl -sf -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer $SLACK_ACCESS_TOKEN" \
+              -H 'Content-type: application/json; charset=utf-8' \
+              --data "$payload" || echo "slack post failed (non-fatal)"
+            exit 0
       - rust-save-build-cache: *tests-cache-args
 
   # Cross-language differential test: runs the Go and Rust dumps of the Interop
