@@ -1,7 +1,9 @@
 package sysgo
 
 import (
+	"fmt"
 	"math/big"
+	"os"
 	"path/filepath"
 	"slices"
 	"time"
@@ -34,6 +36,7 @@ import (
 // funderMnemonicIndex the funding account is not one of the 30 standard account, but still derived from a user-key.
 const funderMnemonicIndex = 10_000
 const devFeatureBitmapKey = "devFeatureBitmap"
+const DevstackL1ForkEnvVar = "DEVSTACK_L1_FORK"
 
 // proxyImplementationSlot is the EIP-1967 proxy implementation storage slot used
 // by every L2 predeploy proxy (`bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`).
@@ -66,6 +69,22 @@ func WithDefaultBPOBlobSchedule(_ devtest.T, _ devkeys.Keys, builder intentbuild
 		BPO3:   params.DefaultBPO3BlobConfig,
 		BPO4:   params.DefaultBPO4BlobConfig,
 	})
+}
+
+// parseL1Fork accepts Ethereum upgrade names and their geth execution-layer names.
+func parseL1Fork(value string) (forks.Fork, error) {
+	fork, ok := map[string]forks.Fork{
+		"dencun": forks.Cancun,
+		"cancun": forks.Cancun,
+		"pectra": forks.Prague,
+		"prague": forks.Prague,
+		"fusaka": forks.Osaka,
+		"osaka":  forks.Osaka,
+	}[value]
+	if ok {
+		return fork, nil
+	}
+	return 0, fmt.Errorf("unsupported L1 fork %q", value)
 }
 
 func WithKarstAtOffset(offset *uint64) DeployerOption {
@@ -248,7 +267,13 @@ func WithCommons(l1ChainID eth.ChainID) DeployerOption {
 		l1StartTimestamp := uint64(time.Now().Unix()) + 1
 		l1Config.WithTimestamp(l1StartTimestamp)
 
-		l1Config.WithL1ForkAtGenesis(forks.Prague) // activate pectra on L1
+		l1Fork := forks.Prague // activate Pectra on L1 by default
+		if value := os.Getenv(DevstackL1ForkEnvVar); value != "" {
+			var err error
+			l1Fork, err = parseL1Fork(value)
+			p.Require().NoError(err, "invalid %s", DevstackL1ForkEnvVar)
+		}
+		l1Config.WithL1ForkAtGenesis(l1Fork)
 
 		faucetFunderAddr, err := keys.Address(devkeys.UserKey(funderMnemonicIndex))
 		p.Require().NoError(err, "need funder addr")
