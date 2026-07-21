@@ -125,6 +125,7 @@ func NewBackend(parentCtx context.Context, params BackendParams) *Backend {
 	if b.failsafeLogInterval <= 0 {
 		b.failsafeLogInterval = defaultFailsafeLogInterval
 	}
+	b.metrics.RecordPassthroughEnabled(b.passthrough)
 
 	// Initialize so the first benign refresh (state == off) does not log a
 	// spurious "cleared" transition.

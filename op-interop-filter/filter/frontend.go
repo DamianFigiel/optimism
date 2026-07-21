@@ -47,6 +47,11 @@ func (p *PublicAdminFrontend) GetFailsafeEnabled(ctx context.Context) (bool, err
 	return p.backend.FailsafeEnabled(), nil
 }
 
+// GetPassthroughEnabled returns whether passthrough mode is enabled.
+func (p *PublicAdminFrontend) GetPassthroughEnabled(ctx context.Context) (bool, error) {
+	return p.backend.passthrough, nil
+}
+
 // AdminFrontend handles admin RPC methods
 type AdminFrontend struct {
 	backend *Backend
@@ -55,6 +60,11 @@ type AdminFrontend struct {
 // GetFailsafeEnabled returns whether failsafe is enabled
 func (a *AdminFrontend) GetFailsafeEnabled(ctx context.Context) (bool, error) {
 	return a.backend.FailsafeEnabled(), nil
+}
+
+// GetPassthroughEnabled returns whether passthrough mode is enabled.
+func (a *AdminFrontend) GetPassthroughEnabled(ctx context.Context) (bool, error) {
+	return a.backend.passthrough, nil
 }
 
 // SetFailsafeEnabled enables or disables failsafe mode
