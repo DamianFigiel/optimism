@@ -769,6 +769,22 @@ func (e *EngineController) insertUnsafePayload(ctx context.Context, envelope *et
 			return derive.NewTemporaryError(fmt.Errorf("failed to fetch finalized head: %w", err))
 		}
 	}
+	// Drop all unsafe payloads while the SuperAuthority denies a block above
+	// the finalized head — from an invalidation until finality passes it, the
+	// earliest point the denied branch provably cannot become canonical again.
+	// Unsafe sync could otherwise re-adopt the invalidated branch (gossip
+	// redelivery, or EL sync toward a far-ahead descendant backfilling the
+	// denied ancestry), undoing the deposits-only replacement and re-triggering
+	// the same invalidation. During the window the chain advances via
+	// (deny-list-checked) derivation only.
+	if e.superAuthority != nil {
+		if maxDenied, ok := e.superAuthority.MaxDeniedHeight(); ok && maxDenied > e.FinalizedHead().Number {
+			e.log.Debug("Dropping unsafe payload during invalidation recovery",
+				"block", envelope.ExecutionPayload.ID())
+			return nil
+		}
+	}
+
 	// Insert the payload & then call FCU
 	newPayloadStart := time.Now()
 	status, err := e.engine.NewPayload(ctx, envelope.ExecutionPayload, envelope.ParentBeaconBlockRoot)
